@@ -421,7 +421,7 @@ export class BatchJobsService {
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
-      });
+      }, { forceUnique: true });
       } else {
       await this.queueService.enqueuePrintingJob({
         tenantId: item.tenantId,
@@ -431,7 +431,7 @@ export class BatchJobsService {
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
-      });
+      }, { forceUnique: true });
       }
     }
 
@@ -467,7 +467,7 @@ export class BatchJobsService {
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
-      });
+      }, { forceUnique: true });
     } else {
       await this.queueService.enqueuePrintingJob({
         tenantId: item.tenantId,
@@ -477,7 +477,7 @@ export class BatchJobsService {
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
-      });
+      }, { forceUnique: true });
     }
 
     await this.prisma.batchJobItem.update({
@@ -777,7 +777,7 @@ export class BatchJobsService {
     }
 
     const activeTask = item.providerTasks.find((task) =>
-      ["SUBMITTED", "CALLBACK_SUCCESS", "POLLED_SUCCESS"].includes(task.status)
+      ["SUBMITTED", "CALLBACK_SUCCESS", "POLLED_SUCCESS", "MANUAL_SYNC_SUCCESS", "POLLING_FAILED"].includes(task.status)
     );
 
     if (!activeTask) {
@@ -819,4 +819,5 @@ export class BatchJobsService {
     };
   }
 }
+
 

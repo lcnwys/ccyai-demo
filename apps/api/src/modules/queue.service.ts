@@ -12,7 +12,7 @@ function safeJobId(...parts: Array<string | undefined>) {
   return parts.filter(Boolean).join("__");
 }
 
-function uniquePollingJobId(...parts: Array<string | undefined>) {
+function uniqueJobId(...parts: Array<string | undefined>) {
   return `${safeJobId(...parts)}__${Date.now()}__${Math.random().toString(36).slice(2, 8)}`;
 }
 
@@ -32,7 +32,11 @@ export class QueueService implements OnModuleDestroy {
     connection: redisConnection
   });
 
-  async enqueuePrintingJob(payload: QueueJobPayload) {
+  async enqueuePrintingJob(payload: QueueJobPayload, options?: { forceUnique?: boolean }) {
+    const jobId = options?.forceUnique
+      ? uniqueJobId(payload.batchJobId, payload.itemId, "extract")
+      : safeJobId(payload.batchJobId, payload.itemId, "extract");
+
     await this.printingQueue.add("printing.extract", payload, {
       attempts: 3,
       removeOnComplete: 1000,
@@ -41,13 +45,17 @@ export class QueueService implements OnModuleDestroy {
         type: "exponential",
         delay: 3000
       },
-      jobId: safeJobId(payload.batchJobId, payload.itemId, "extract")
+      jobId
     });
 
-    this.logger.log(`Enqueued printing job for item ${payload.itemId}`);
+    this.logger.log(`Enqueued printing job for item ${payload.itemId} jobId=${jobId}`);
   }
 
-  async enqueueImageJob(payload: QueueJobPayload) {
+  async enqueueImageJob(payload: QueueJobPayload, options?: { forceUnique?: boolean }) {
+    const jobId = options?.forceUnique
+      ? uniqueJobId(payload.batchJobId, payload.itemId, "image")
+      : safeJobId(payload.batchJobId, payload.itemId, "image");
+
     await this.imageQueue.add("image.generate", payload, {
       attempts: 3,
       removeOnComplete: 1000,
@@ -56,14 +64,14 @@ export class QueueService implements OnModuleDestroy {
         type: "exponential",
         delay: 3000
       },
-      jobId: safeJobId(payload.batchJobId, payload.itemId, "image")
+      jobId
     });
 
-    this.logger.log(`Enqueued image job for item ${payload.itemId}`);
+    this.logger.log(`Enqueued image job for item ${payload.itemId} jobId=${jobId}`);
   }
 
   async enqueuePollingJob(payload: QueueJobPayload, delay = 20000) {
-    const jobId = uniquePollingJobId(
+    const jobId = uniqueJobId(
       payload.batchJobId,
       payload.itemId,
       payload.taskType ?? "unknown",
@@ -93,4 +101,3 @@ export class QueueService implements OnModuleDestroy {
     await this.pollingQueue.close();
   }
 }
-
