@@ -1,6 +1,10 @@
 import { Body, Controller, Get, Headers, Logger, Param, Post } from "@nestjs/common";
 import { AuthService } from "./auth.service";
-import { BatchJobsService, CreateBatchJobDto } from "./batch-jobs.service";
+import {
+  BatchJobsService,
+  CreateBatchJobDto,
+  RegenerateBatchJobItemDto
+} from "./batch-jobs.service";
 
 @Controller("batch-jobs")
 export class BatchJobsController {
@@ -60,6 +64,16 @@ export class BatchJobsController {
   ) {
     const currentUser = await this.authService.getCurrentUser(authorization);
     return this.batchJobsService.retryItem(id, currentUser);
+  }
+
+  @Post("items/:id/regenerate")
+  async regenerateItem(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string,
+    @Body() body: RegenerateBatchJobItemDto
+  ) {
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.regenerateItem(id, body, currentUser);
   }
 
   @Post("items/:id/print-export")

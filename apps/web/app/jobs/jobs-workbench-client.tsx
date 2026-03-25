@@ -1,9 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { BatchJobDetail, BatchJobSummary, buildApiUrl } from "../lib/api";
+import {
+  BatchJobDetail,
+  BatchJobSummary,
+  buildApiUrl,
+  regenerateBatchJobItem
+} from "../lib/api";
 import { JobDetailClient } from "./[id]/job-detail-client";
 import { ItemRetryButton } from "./[id]/item-retry-button";
 import { ManualSyncButton } from "./[id]/manual-sync-button";
@@ -95,10 +100,28 @@ export function JobsWorkbenchClient({
   const [activeItemId, setActiveItemId] = useState<string | null>(
     selectedJob?.items[0]?.id ?? null
   );
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [regenerateTargetId, setRegenerateTargetId] = useState<string | null>(null);
+  const [regeneratePrompt, setRegeneratePrompt] = useState("");
+  const [regenerateResolutionId, setRegenerateResolutionId] = useState<number>(1);
+  const [regenerateAspectRatioId, setRegenerateAspectRatioId] = useState<number | "auto">("auto");
+  const [regenerateSimilarity, setRegenerateSimilarity] = useState(0.72);
+  const [regenerateUseSourceFile, setRegenerateUseSourceFile] = useState(true);
+  const [regenerateMessage, setRegenerateMessage] = useState("");
+  const [isRegenerating, startRegenerateTransition] = useTransition();
+  const [pendingActiveItemId, setPendingActiveItemId] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveItemId(selectedJob?.items[0]?.id ?? null);
   }, [selectedJob?.id, selectedJob?.items]);
+
+  useEffect(() => {
+    if (!selectedJob || !pendingActiveItemId) return;
+    if (selectedJob.items.some((item) => item.id === pendingActiveItemId)) {
+      setActiveItemId(pendingActiveItemId);
+      setPendingActiveItemId(null);
+    }
+  }, [pendingActiveItemId, selectedJob]);
 
   const filteredJobs = useMemo(() => {
     return jobs.filter((job) => {
@@ -124,6 +147,51 @@ export function JobsWorkbenchClient({
   const pendingCount = selectedJob
     ? selectedJob.totalCount - selectedJob.successCount - selectedJob.failedCount
     : 0;
+  const regenerateTarget =
+    selectedJob?.items.find((item) => item.id === regenerateTargetId) ?? null;
+  const selectedCapability =
+    selectedJob?.capability ?? (selectedJob?.type === "PRINTING_EXTRACT" ? "printing-extract" : "image-generate");
+
+  function openRegenerateModal(item: BatchJobDetail["items"][number]) {
+    setRegenerateTargetId(item.id);
+    setRegeneratePrompt(item.prompt ?? "");
+    setRegenerateResolutionId(item.resolutionId ?? 1);
+    setRegenerateAspectRatioId(item.aspectRatioId ?? "auto");
+    setRegenerateSimilarity(item.options?.similarity ?? 0.72);
+    setRegenerateUseSourceFile(Boolean(item.sourceFileId));
+    setRegenerateMessage("");
+  }
+
+  function closeRegenerateModal() {
+    setRegenerateTargetId(null);
+    setRegenerateMessage("");
+  }
+
+  function submitRegenerate() {
+    if (!regenerateTarget) return;
+
+    startRegenerateTransition(async () => {
+      try {
+        const result = await regenerateBatchJobItem(regenerateTarget.id, {
+          prompt: regeneratePrompt.trim() || null,
+          resolutionId: regenerateResolutionId,
+          aspectRatioId:
+            selectedJob?.type === "IMAGE_GENERATE" ? (regenerateAspectRatioId === "auto" ? null : regenerateAspectRatioId) : null,
+          similarity: selectedCapability === "fission" ? regenerateSimilarity : null,
+          useSourceFile: selectedCapability === "image-generate" ? regenerateUseSourceFile : true
+        });
+
+        setRegenerateMessage(result.data.message);
+        setPendingActiveItemId(result.data.newItemId);
+        closeRegenerateModal();
+        router.refresh();
+      } catch (error) {
+        setRegenerateMessage(
+          error instanceof Error ? error.message : "重新生成失败。"
+        );
+      }
+    });
+  }
 
   function selectJob(jobId: string) {
     router.replace(`/jobs?selected=${jobId}`, { scroll: false });
@@ -377,6 +445,18 @@ export function JobsWorkbenchClient({
                           <span className="rounded-full border border-white/8 bg-black/18 px-3 py-1 text-white/50">{item.step}</span>
                           {item.errorMessage ? <span className="rounded-full border border-red-400/16 bg-red-500/10 px-3 py-1 text-red-300">异常</span> : null}
                         </div>
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openRegenerateModal(item);
+                            }}
+                            className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold text-white/72 transition hover:bg-white/[0.06]"
+                          >
+                            重新生成
+                          </button>
+                        </div>
                       </div>
                     </button>
                   );
@@ -385,7 +465,7 @@ export function JobsWorkbenchClient({
             </div>
 
             {currentItem ? (
-              <div className="grid gap-4 2xl:grid-cols-[1.1fr_0.9fr]">
+              <div className="grid gap-4">
                 <article className="rounded-[1.7rem] border border-white/8 bg-white/[0.035] p-5 backdrop-blur-xl">
                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 pb-4">
                     <div>
@@ -449,77 +529,260 @@ export function JobsWorkbenchClient({
                               downloadPath={currentItem.resultDownloadPath}
                               fileName={currentItem.resultFile?.fileName ?? null}
                             />
+                            <button
+                              type="button"
+                              onClick={() => openRegenerateModal(currentItem)}
+                              className="rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.06]"
+                            >
+                              重新生成
+                            </button>
                             {hasQueryableProviderTask(currentItem.providerTasks) ? <ManualSyncButton itemId={currentItem.id} compact /> : null}
+                            <button
+                              type="button"
+                              onClick={() => setDetailOpen(true)}
+                              className="rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.06]"
+                            >
+                              查看任务详情
+                            </button>
                           </div>
                         </>
                       ) : (
                         <div className="mt-3 space-y-3 rounded-[1rem] border border-dashed border-[#d6b25e]/15 bg-black/18 p-4 text-sm leading-7 text-white/48">
                           <p>{hasQueryableProviderTask(currentItem.providerTasks) ? "当前还没有结果文件，可直接手动查询一次结果。" : "当前还没有 provider 任务，先重试此项再查询。"}</p>
-                          {hasQueryableProviderTask(currentItem.providerTasks) ? <ManualSyncButton itemId={currentItem.id} compact /> : null}
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => openRegenerateModal(currentItem)}
+                              className="rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.06]"
+                            >
+                              重新生成
+                            </button>
+                            {hasQueryableProviderTask(currentItem.providerTasks) ? <ManualSyncButton itemId={currentItem.id} compact /> : null}
+                            <button
+                              type="button"
+                              onClick={() => setDetailOpen(true)}
+                              className="rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.06]"
+                            >
+                              查看任务详情
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
                   </div>
                 </article>
 
-                <article className="space-y-4">
-                  <div className="rounded-[1.7rem] border border-white/8 bg-white/[0.035] p-5 backdrop-blur-xl">
-                    <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">任务信息</p>
-                    <div className="mt-4 space-y-3 text-sm leading-7 text-white/58">
-                      <p className="break-all">源文件：{currentItem.sourceFileId ?? "未上传，当前为文生图"}</p>
-                      <p>结果文件：{currentItem.resultFile?.fileName ?? "待归档"}</p>
-                      <p className={currentItem.errorMessage ? "text-red-300" : "text-white/42"}>
-                        错误信息：{currentItem.errorMessage ?? "无"}
-                      </p>
+              </div>
+            ) : null}
+
+            {regenerateTarget ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/72 px-4 backdrop-blur-sm">
+                <div className="w-full max-w-2xl rounded-[1.8rem] border border-white/8 bg-[linear-gradient(180deg,rgba(26,24,20,0.98),rgba(11,10,8,1))] p-6 shadow-luxe">
+                  <div className="flex items-center justify-between gap-4 border-b border-white/8 pb-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">重新生成</p>
+                      <h3 className="mt-2 break-all text-xl font-semibold text-white">{regenerateTarget.id}</h3>
                     </div>
+                    <button
+                      type="button"
+                      onClick={closeRegenerateModal}
+                      className="rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.06]"
+                    >
+                      关闭
+                    </button>
                   </div>
 
-                  <div className="rounded-[1.7rem] border border-white/8 bg-white/[0.035] p-5 backdrop-blur-xl">
-                    <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">Provider 控制台</p>
-                    <div className="mt-4 space-y-3">
-                      {currentItem.providerTasks.length ? (
-                        currentItem.providerTasks.map((task) => {
-                          const resultInfo = getResultInfo([task]);
-
-                          return (
-                            <div
-                              key={task.id}
-                              className="rounded-[1.2rem] border border-[#d6b25e]/10 bg-black/18 p-4 text-sm text-white/62"
+                  <div className="mt-5 grid gap-4">
+                    <div className="rounded-[1.2rem] border border-white/6 bg-white/[0.03] p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">参数回填</p>
+                      <div className="mt-4 grid gap-4">
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="flex flex-col gap-2">
+                            <label className="text-sm font-medium text-[#ecdca2]">分辨率</label>
+                            <select
+                              value={regenerateResolutionId}
+                              onChange={(event) => setRegenerateResolutionId(Number(event.target.value))}
+                              className="rounded-2xl border border-[#c79b2c]/18 bg-[#15130f] px-4 py-3 text-sm text-[#fff7dc] outline-none transition focus:border-[#d4af37]"
                             >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <strong className="text-white">{task.taskType}</strong>
-                                <span
-                                  className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
-                                    statusTone[task.status] ?? "bg-zinc-500/12 text-zinc-300"
-                                  }`}
-                                >
-                                  {statusLabel[task.status] ?? task.status}
-                                </span>
-                              </div>
-                              <p className="mt-3 break-all">任务ID：{task.providerTaskId}</p>
-                              <p className="mt-1">重试次数：{task.retryCount}</p>
-                              <p className="mt-1 text-xs text-white/38">
-                                创建时间：
-                                {new Date(task.createdAt).toLocaleString("zh-CN", {
-                                  hour12: false
-                                })}
-                              </p>
-                              {resultInfo ? (
-                                <div className="mt-3 rounded-[1rem] border border-white/8 bg-white/[0.03] p-3 text-xs leading-6 text-white/48">
-                                  <p className="break-all">结果图 ID：{resultInfo.generateImageId}</p>
-                                  <p>requestId：{resultInfo.requestId ?? "未返回"}</p>
-                                  <p>扣费金额：{resultInfo.deductibleAmount ?? "未返回"}</p>
-                                </div>
-                              ) : null}
+                              <option value={0}>1K</option>
+                              <option value={1}>2K</option>
+                              <option value={2}>4K</option>
+                            </select>
+                          </div>
+
+                          {selectedJob?.type === "IMAGE_GENERATE" ? (
+                            <div className="flex flex-col gap-2">
+                              <label className="text-sm font-medium text-[#ecdca2]">生图比例</label>
+                              <select
+                                value={regenerateAspectRatioId}
+                                onChange={(event) =>
+                                  setRegenerateAspectRatioId(
+                                    event.target.value === "auto" ? "auto" : Number(event.target.value)
+                                  )
+                                }
+                                className="rounded-2xl border border-[#c79b2c]/18 bg-[#15130f] px-4 py-3 text-sm text-[#fff7dc] outline-none transition focus:border-[#d4af37]"
+                              >
+                                <option value="auto">自动</option>
+                                <option value={0}>1:1</option>
+                                <option value={1}>4:3</option>
+                                <option value={2}>3:4</option>
+                                <option value={3}>4:5</option>
+                                <option value={4}>5:4</option>
+                                <option value={5}>9:16</option>
+                                <option value={6}>16:9</option>
+                                <option value={7}>21:9</option>
+                              </select>
                             </div>
-                          );
-                        })
-                      ) : (
-                        <p className="text-sm text-white/45">当前没有 provider 任务记录。</p>
-                      )}
+                          ) : null}
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                          <label className="text-sm font-medium text-[#ecdca2]">
+                            {selectedCapability === "fission" ? "裂变描述" : "提示词"}
+                          </label>
+                          <textarea
+                            value={regeneratePrompt}
+                            onChange={(event) => setRegeneratePrompt(event.target.value)}
+                            placeholder="按需调整这次重新生成的参数"
+                            className="min-h-32 rounded-3xl border border-[#c79b2c]/18 bg-[#15130f] px-4 py-3 text-sm text-[#fff7dc] outline-none transition placeholder:text-[#7f7453] focus:border-[#d4af37]"
+                          />
+                        </div>
+
+                        {selectedCapability === "fission" ? (
+                          <div className="flex flex-col gap-2">
+                            <label className="text-sm font-medium text-[#ecdca2]">相似度</label>
+                            <input
+                              type="range"
+                              min="0.01"
+                              max="1"
+                              step="0.01"
+                              value={regenerateSimilarity}
+                              onChange={(event) => setRegenerateSimilarity(Number(event.target.value))}
+                              className="accent-[#d4af37]"
+                            />
+                            <div className="flex items-center justify-between text-xs text-white/50">
+                              <span>更自由</span>
+                              <strong className="text-[#f4d47b]">{regenerateSimilarity.toFixed(2)}</strong>
+                              <span>更接近原图</span>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {selectedCapability === "image-generate" && regenerateTarget.sourceFileId ? (
+                          <label className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-white/68">
+                            <input
+                              type="checkbox"
+                              checked={regenerateUseSourceFile}
+                              onChange={(event) => setRegenerateUseSourceFile(event.target.checked)}
+                              className="h-4 w-4 accent-[#d4af37]"
+                            />
+                            是否继续使用当前参考图
+                          </label>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    {regenerateMessage ? (
+                      <p className="text-sm leading-7 text-[#dccb92]">{regenerateMessage}</p>
+                    ) : null}
+
+                    <div className="flex flex-wrap justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={closeRegenerateModal}
+                        className="rounded-full border border-white/8 bg-white/[0.03] px-5 py-3 text-sm font-medium text-white/72 transition hover:bg-white/[0.06]"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        onClick={submitRegenerate}
+                        disabled={isRegenerating}
+                        className="rounded-full bg-[linear-gradient(180deg,#e9bc63,#b77c32)] px-5 py-3 text-sm font-medium text-black transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isRegenerating ? "生成中..." : "确认重新生成"}
+                      </button>
                     </div>
                   </div>
-                </article>
+                </div>
+              </div>
+            ) : null}
+
+            {currentItem && detailOpen ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/72 px-4 backdrop-blur-sm">
+                <div className="w-full max-w-3xl rounded-[1.8rem] border border-white/8 bg-[linear-gradient(180deg,rgba(26,24,20,0.98),rgba(11,10,8,1))] p-6 shadow-luxe">
+                  <div className="flex items-center justify-between gap-4 border-b border-white/8 pb-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">任务详情</p>
+                      <h3 className="mt-2 break-all text-xl font-semibold text-white">{currentItem.id}</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setDetailOpen(false)}
+                      className="rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-white/72 transition hover:bg-white/[0.06]"
+                    >
+                      关闭
+                    </button>
+                  </div>
+                  <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-[1.2rem] border border-white/6 bg-white/[0.03] p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">任务信息</p>
+                      <div className="mt-3 space-y-2 text-sm leading-7 text-white/58">
+                        <p className="break-all">源文件：{currentItem.sourceFileId ?? "未上传，当前为文生图"}</p>
+                        <p>结果文件：{currentItem.resultFile?.fileName ?? "待归档"}</p>
+                        <p>状态：{statusLabel[currentItem.status] ?? currentItem.status}</p>
+                        <p className={currentItem.errorMessage ? "text-red-300" : "text-white/42"}>
+                          错误信息：{currentItem.errorMessage ?? "无"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="rounded-[1.2rem] border border-white/6 bg-white/[0.03] p-4">
+                      <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">Provider 记录</p>
+                      <div className="mt-3 space-y-3">
+                        {currentItem.providerTasks.length ? (
+                          currentItem.providerTasks.map((task) => {
+                            const resultInfo = getResultInfo([task]);
+
+                            return (
+                              <div
+                                key={task.id}
+                                className="rounded-[1rem] border border-[#d6b25e]/10 bg-black/18 p-4 text-sm text-white/62"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <strong className="text-white">{task.taskType}</strong>
+                                  <span
+                                    className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
+                                      statusTone[task.status] ?? "bg-zinc-500/12 text-zinc-300"
+                                    }`}
+                                  >
+                                    {statusLabel[task.status] ?? task.status}
+                                  </span>
+                                </div>
+                                <p className="mt-3 break-all">任务ID：{task.providerTaskId}</p>
+                                <p className="mt-1">重试次数：{task.retryCount}</p>
+                                <p className="mt-1 text-xs text-white/38">
+                                  创建时间：
+                                  {new Date(task.createdAt).toLocaleString("zh-CN", {
+                                    hour12: false
+                                  })}
+                                </p>
+                                {resultInfo ? (
+                                  <div className="mt-3 rounded-[1rem] border border-white/8 bg-white/[0.03] p-3 text-xs leading-6 text-white/48">
+                                    <p className="break-all">结果图 ID：{resultInfo.generateImageId}</p>
+                                    <p>requestId：{resultInfo.requestId ?? "未返回"}</p>
+                                    <p>扣费金额：{resultInfo.deductibleAmount ?? "未返回"}</p>
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <p className="text-sm text-white/45">当前没有 provider 任务记录。</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
           </>

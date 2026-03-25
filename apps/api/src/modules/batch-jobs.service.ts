@@ -17,6 +17,13 @@ import { ChcyAiClient } from "./chcyai.client";
 import { RuntimeConfigService } from "./runtime-config.service";
 
 export type CreateBatchJobDto = BatchJobPayload;
+export type RegenerateBatchJobItemDto = {
+  prompt?: string | null;
+  resolutionId?: number | null;
+  aspectRatioId?: number | null;
+  similarity?: number | null;
+  useSourceFile?: boolean;
+};
 
 @Injectable()
 export class BatchJobsService {
@@ -32,6 +39,56 @@ export class BatchJobsService {
 
   private sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private getBatchCapability(configJson: Prisma.JsonValue | null) {
+    return ((configJson as { capability?: string } | null)?.capability ?? null);
+  }
+
+  private getItemOptions(optionsJson: Prisma.JsonValue | null) {
+    return (optionsJson as { similarity?: number } | null) ?? null;
+  }
+
+  private async enqueueBatchJobItem(input: {
+    item: {
+      id: string;
+      batchJobId: string;
+      tenantId: string;
+      sourceFileId: string | null;
+      prompt: string | null;
+      resolutionId: number | null;
+      aspectRatioId: number | null;
+      step: BatchItemStep;
+    };
+  }) {
+    if (input.item.step === BatchItemStep.GENERATE) {
+      await this.queueService.enqueueImageJob(
+        {
+          tenantId: input.item.tenantId,
+          batchJobId: input.item.batchJobId,
+          itemId: input.item.id,
+          sourceFileId: input.item.sourceFileId ?? "",
+          prompt: input.item.prompt ?? undefined,
+          aspectRatioId: input.item.aspectRatioId ?? undefined,
+          resolutionId: input.item.resolutionId ?? undefined
+        },
+        { forceUnique: true }
+      );
+      return;
+    }
+
+    await this.queueService.enqueuePrintingJob(
+      {
+        tenantId: input.item.tenantId,
+        batchJobId: input.item.batchJobId,
+        itemId: input.item.id,
+        sourceFileId: input.item.sourceFileId ?? "",
+        prompt: input.item.prompt ?? undefined,
+        aspectRatioId: input.item.aspectRatioId ?? undefined,
+        resolutionId: input.item.resolutionId ?? undefined
+      },
+      { forceUnique: true }
+    );
   }
 
   private extractGenerateImageId(
@@ -303,14 +360,18 @@ export class BatchJobsService {
               tenantId: currentUser.tenantId,
               sourceFileId: item.sourceFileId ?? null,
               prompt: item.prompt,
-            resolutionId: item.resolutionId,
-            aspectRatioId: item.aspectRatioId,
-            status: BatchItemStatus.PENDING,
-            step:
-              payload.type === BatchJobTypes.IMAGE_GENERATE
-                ? BatchItemStep.GENERATE
-                : BatchItemStep.EXTRACT
-          }))
+              resolutionId: item.resolutionId,
+              aspectRatioId: item.aspectRatioId,
+              optionsJson:
+                payload.config && Object.keys(payload.config).length
+                  ? (payload.config as Prisma.InputJsonValue)
+                  : Prisma.JsonNull,
+              status: BatchItemStatus.PENDING,
+              step:
+                payload.type === BatchJobTypes.IMAGE_GENERATE
+                  ? BatchItemStep.GENERATE
+                  : BatchItemStep.EXTRACT
+            }))
         }
       }
     });
@@ -325,27 +386,7 @@ export class BatchJobsService {
     });
 
     for (const item of items) {
-        if (payload.type === BatchJobTypes.IMAGE_GENERATE) {
-          await this.queueService.enqueueImageJob({
-            tenantId: currentUser.tenantId,
-            batchJobId: batchJob.id,
-            itemId: item.id,
-            sourceFileId: item.sourceFileId ?? "",
-            prompt: item.prompt ?? undefined,
-            aspectRatioId: item.aspectRatioId ?? undefined,
-            resolutionId: item.resolutionId ?? undefined
-          });
-        } else {
-          await this.queueService.enqueuePrintingJob({
-            tenantId: currentUser.tenantId,
-            batchJobId: batchJob.id,
-            itemId: item.id,
-            sourceFileId: item.sourceFileId ?? "",
-            prompt: item.prompt ?? undefined,
-            aspectRatioId: item.aspectRatioId ?? undefined,
-            resolutionId: item.resolutionId ?? undefined
-          });
-        }
+      await this.enqueueBatchJobItem({ item });
     }
 
     return {
@@ -393,9 +434,10 @@ export class BatchJobsService {
       data: {
         ...batchJob,
         capability:
-          ((batchJob.configJson as { capability?: string } | null)?.capability ?? null),
+          this.getBatchCapability(batchJob.configJson),
         items: batchJob.items.map((item) => ({
           ...item,
+          options: this.getItemOptions(item.optionsJson),
           hasSourceFile: Boolean(item.sourceFileId),
           resultFile: item.resultFileId ? fileMap.get(item.resultFileId) ?? null : null,
           resultDownloadPath: item.resultFileId
@@ -428,27 +470,7 @@ export class BatchJobsService {
     });
 
     for (const item of items) {
-      if (item.step === BatchItemStep.GENERATE) {
-      await this.queueService.enqueueImageJob({
-        tenantId: item.tenantId,
-        batchJobId: id,
-        itemId: item.id,
-        sourceFileId: item.sourceFileId ?? "",
-        prompt: item.prompt ?? undefined,
-        aspectRatioId: item.aspectRatioId ?? undefined,
-        resolutionId: item.resolutionId ?? undefined
-      }, { forceUnique: true });
-      } else {
-      await this.queueService.enqueuePrintingJob({
-        tenantId: item.tenantId,
-        batchJobId: id,
-        itemId: item.id,
-        sourceFileId: item.sourceFileId ?? "",
-        prompt: item.prompt ?? undefined,
-        aspectRatioId: item.aspectRatioId ?? undefined,
-        resolutionId: item.resolutionId ?? undefined
-      }, { forceUnique: true });
-      }
+      await this.enqueueBatchJobItem({ item });
     }
 
     return {
@@ -479,27 +501,7 @@ export class BatchJobsService {
       };
     }
 
-    if (item.step === BatchItemStep.GENERATE) {
-      await this.queueService.enqueueImageJob({
-        tenantId: item.tenantId,
-        batchJobId: item.batchJobId,
-        itemId: item.id,
-        sourceFileId: item.sourceFileId ?? "",
-        prompt: item.prompt ?? undefined,
-        aspectRatioId: item.aspectRatioId ?? undefined,
-        resolutionId: item.resolutionId ?? undefined
-      }, { forceUnique: true });
-    } else {
-      await this.queueService.enqueuePrintingJob({
-        tenantId: item.tenantId,
-        batchJobId: item.batchJobId,
-        itemId: item.id,
-        sourceFileId: item.sourceFileId ?? "",
-        prompt: item.prompt ?? undefined,
-        aspectRatioId: item.aspectRatioId ?? undefined,
-        resolutionId: item.resolutionId ?? undefined
-      }, { forceUnique: true });
-    }
+    await this.enqueueBatchJobItem({ item });
 
     await this.prisma.batchJobItem.update({
       where: { id: item.id },
@@ -522,6 +524,109 @@ export class BatchJobsService {
         itemId: id,
         retried: true,
         message: "已重新入队。"
+      }
+    };
+  }
+
+  async regenerateItem(
+    id: string,
+    payload: RegenerateBatchJobItemDto,
+    currentUser: { id: string }
+  ) {
+    const item = await this.prisma.batchJobItem.findFirst({
+      where: {
+        id,
+        batchJob: {
+          createdBy: currentUser.id
+        }
+      },
+      include: {
+        batchJob: true
+      }
+    });
+
+    if (!item) {
+      return {
+        data: {
+          itemId: id,
+          created: false,
+          message: "任务项不存在。"
+        }
+      };
+    }
+
+    const capability = this.getBatchCapability(item.batchJob.configJson);
+    const itemOptions = this.getItemOptions(item.optionsJson);
+    const useSourceFile =
+      item.batchJob.type === BatchJobType.IMAGE_GENERATE && capability !== "fission"
+        ? payload.useSourceFile ?? Boolean(item.sourceFileId)
+        : true;
+    const sourceFileId = useSourceFile ? item.sourceFileId : null;
+
+    if (!sourceFileId && item.step === BatchItemStep.EXTRACT) {
+      return {
+        data: {
+          itemId: id,
+          created: false,
+          message: "印花提取任务必须保留原图。"
+        }
+      };
+    }
+
+    if (capability === "fission" && !sourceFileId) {
+      return {
+        data: {
+          itemId: id,
+          created: false,
+          message: "图裂变必须保留参考图。"
+        }
+      };
+    }
+
+    const nextPrompt = payload.prompt?.trim() ? payload.prompt.trim() : null;
+    const nextSimilarity =
+      capability === "fission"
+        ? payload.similarity ?? itemOptions?.similarity ?? 0.72
+        : null;
+
+    const regeneratedItem = await this.prisma.batchJobItem.create({
+      data: {
+        batchJobId: item.batchJobId,
+        tenantId: item.tenantId,
+        sourceFileId,
+        prompt: nextPrompt,
+        resolutionId: payload.resolutionId ?? item.resolutionId,
+        aspectRatioId:
+          item.step === BatchItemStep.GENERATE
+            ? payload.aspectRatioId ?? item.aspectRatioId
+            : null,
+        optionsJson:
+          nextSimilarity !== null
+            ? ({ similarity: nextSimilarity } as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+        status: BatchItemStatus.PENDING,
+        step: item.step
+      }
+    });
+
+    await this.prisma.batchJob.update({
+      where: { id: item.batchJobId },
+      data: {
+        totalCount: { increment: 1 },
+        status: BatchJobStatus.RUNNING
+      }
+    });
+
+    await this.enqueueBatchJobItem({
+      item: regeneratedItem
+    });
+
+    return {
+      data: {
+        itemId: id,
+        newItemId: regeneratedItem.id,
+        created: true,
+        message: "已按当前参数创建新的任务项。"
       }
     };
   }

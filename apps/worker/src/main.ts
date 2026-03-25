@@ -329,8 +329,11 @@ async function handleImage(job: Job<QueueJobPayload>) {
   const settings = await loadRuntimeSettings();
   const callbackUrl = `${settings.chcy?.callbackBaseUrl ?? process.env.CHCY_CALLBACK_BASE_URL}/api/callbacks/chcyai`;
   const capability = (item.batchJob.configJson as { capability?: string; similarity?: number } | null)?.capability;
+  const itemOptions = (item.optionsJson as { similarity?: number } | null) ?? null;
   const similarity =
-    (item.batchJob.configJson as { capability?: string; similarity?: number } | null)?.similarity ?? 0.72;
+    itemOptions?.similarity ??
+    (item.batchJob.configJson as { capability?: string; similarity?: number } | null)?.similarity ??
+    0.72;
 
   if (capability === "fission" && !referenceImageId) {
     throw new Error("图裂变任务必须提供参考图。");

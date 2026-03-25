@@ -91,6 +91,11 @@ export type BatchJobDetail = {
     status: string;
     step: string;
     prompt: string | null;
+    resolutionId: number | null;
+    aspectRatioId: number | null;
+    options: null | {
+      similarity?: number;
+    };
     errorMessage: string | null;
     sourceFileId: string | null;
     resultFileId: string | null;
@@ -110,6 +115,14 @@ export type BatchJobDetail = {
       callbackPayload: unknown;
     }>;
   }>;
+};
+
+export type RegenerateBatchJobItemInput = {
+  prompt?: string | null;
+  resolutionId?: number | null;
+  aspectRatioId?: number | null;
+  similarity?: number | null;
+  useSourceFile?: boolean;
 };
 
 export type CreateBatchJobInput = {
@@ -263,6 +276,33 @@ export async function retryBatchJobItem(id: string, token?: string) {
     data: {
       itemId: string;
       retried: boolean;
+      message: string;
+    };
+  }>;
+}
+
+export async function regenerateBatchJobItem(
+  id: string,
+  payload: RegenerateBatchJobItemInput,
+  token?: string
+) {
+  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/regenerate`, {
+    method: "POST",
+    headers: buildAuthHeaders(token, {
+      "Content-Type": "application/json"
+    }),
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{
+    data: {
+      itemId: string;
+      newItemId: string;
+      created: boolean;
       message: string;
     };
   }>;

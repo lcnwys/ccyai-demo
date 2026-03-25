@@ -123,6 +123,7 @@ model BatchJobItem {
   prompt        String?          @db.LongText
   resolutionId  Int?
   aspectRatioId Int?
+  optionsJson   Json?
   errorCode     String?
   errorMessage  String?
   resultFileId  String?
