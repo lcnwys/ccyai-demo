@@ -1,0 +1,19 @@
+{
+  "name": "chuangciyuan-platform",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @chcy/web",
+    "dev:api": "npm run dev -w @chcy/api",
+    "dev:worker": "npm run dev -w @chcy/worker",
+    "build": "npm run build -ws",
+    "lint": "npm run lint -ws",
+    "db:generate": "npm run db:generate -w @chcy/api",
+    "db:migrate": "npm run db:migrate -w @chcy/api",
+    "deploy:docker": "docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build"
+  }
+}

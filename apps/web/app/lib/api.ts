@@ -1,0 +1,388 @@
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
+
+export function buildApiUrl(path: string) {
+  return `${API_BASE_URL.replace(/\/api$/, "")}${path}`;
+}
+
+type ApiErrorResult = {
+  error: string | null;
+};
+
+async function safeFetchJson<T>(
+  input: string,
+  init?: RequestInit
+): Promise<{ data: T; error: string | null }> {
+  try {
+    const response = await fetch(input, init);
+
+    if (!response.ok) {
+      return {
+        data: null as T,
+        error: await response.text()
+      };
+    }
+
+    return {
+      data: (await response.json()) as T,
+      error: null
+    };
+  } catch (error) {
+    return {
+      data: null as T,
+      error: error instanceof Error ? error.message : "fetch failed"
+    };
+  }
+}
+
+export type UploadedFileResult = {
+  fileId: string;
+  ossKey: string;
+  url?: string;
+};
+
+export type BatchJobSummary = {
+  id: string;
+  name: string;
+  type: string;
+  capability?: string | null;
+  status: string;
+  totalCount: number;
+  successCount: number;
+  failedCount: number;
+  createdAt: string;
+};
+
+export type BatchJobDetail = {
+  id: string;
+  name: string;
+  status: string;
+  type: string;
+  capability?: string | null;
+  totalCount: number;
+  successCount: number;
+  failedCount: number;
+  createdAt: string;
+  items: Array<{
+    id: string;
+    status: string;
+    step: string;
+    prompt: string | null;
+    errorMessage: string | null;
+    sourceFileId: string | null;
+    resultFileId: string | null;
+    resultDownloadPath: string | null;
+    resultFile: null | {
+      id: string;
+      fileName: string;
+      mimeType: string;
+    };
+    providerTasks: Array<{
+      id: string;
+      taskType: string;
+      providerTaskId: string;
+      status: string;
+      retryCount: number;
+      createdAt: string;
+      callbackPayload: unknown;
+    }>;
+  }>;
+};
+
+export type CreateBatchJobInput = {
+  tenantId: string;
+  name: string;
+  type: "PRINTING_EXTRACT" | "IMAGE_GENERATE" | "EXTRACT_THEN_GENERATE";
+  createdBy: string;
+  config?: Record<string, unknown>;
+  items: Array<{
+    sourceFileId?: string | null;
+    prompt?: string;
+    aspectRatioId?: number;
+    resolutionId?: number;
+  }>;
+};
+
+export type SystemSettings = {
+  app: {
+    loginEmail: string;
+    loginPassword: string;
+    sessionSecret: string;
+  };
+  chcy: {
+    apiBaseUrl: string;
+    accessKey: string;
+    secretKey: string;
+    callbackBaseUrl: string;
+  };
+  oss: {
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    accessKeySecret: string;
+  };
+};
+
+export async function uploadFile(file: File, tenantId = "demo-tenant") {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("tenantId", tenantId);
+
+  const response = await fetch(`${API_BASE_URL}/files`, {
+    method: "POST",
+    body: form
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<UploadedFileResult>;
+}
+
+export async function createBatchJob(payload: CreateBatchJobInput) {
+  const response = await fetch(`${API_BASE_URL}/batch-jobs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{ data: { batchJobId: string } }>;
+}
+
+export async function listBatchJobs() {
+  const result = await safeFetchJson<{
+    data: BatchJobSummary[];
+  }>(`${API_BASE_URL}/batch-jobs`, {
+    cache: "no-store"
+  });
+
+  return {
+    data: result.data?.data ?? [],
+    error: result.error
+  };
+}
+
+export async function getBatchJob(id: string) {
+  const result = await safeFetchJson<{
+    data: BatchJobDetail | null;
+  }>(`${API_BASE_URL}/batch-jobs/${id}`, {
+    cache: "no-store"
+  });
+
+  return {
+    data: result.data?.data ?? null,
+    error: result.error
+  };
+}
+
+export async function retryBatchJob(id: string) {
+  const response = await fetch(`${API_BASE_URL}/batch-jobs/${id}/retry`, {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{
+    data: {
+      batchJobId: string;
+      retriedCount: number;
+    };
+  }>;
+}
+
+export async function exportBatchJob(id: string) {
+  const response = await fetch(`${API_BASE_URL}/batch-jobs/${id}/export`, {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{
+    data: {
+      batchJobId: string;
+      status: string;
+      exportUrl: string | null;
+      message: string;
+    };
+  }>;
+}
+
+export async function retryBatchJobItem(id: string) {
+  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/retry`, {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{
+    data: {
+      itemId: string;
+      retried: boolean;
+      message: string;
+    };
+  }>;
+}
+
+export async function exportPrintAsset(
+  itemId: string,
+  dpi: number
+) {
+  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${itemId}/print-export`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ dpi })
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{
+    data: {
+      itemId: string;
+      exportUrl: string | null;
+      message: string;
+    };
+  }>;
+}
+
+export async function syncBatchJobItemResult(id: string) {
+  console.info("[CHCY WEB] 手动查询结果 -> 请求开始", {
+    itemId: id,
+    url: `${API_BASE_URL}/batch-jobs/items/${id}/sync-result`
+  });
+  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/sync-result`, {
+    method: "POST"
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error("[CHCY WEB] 手动查询结果 -> 请求失败", {
+      itemId: id,
+      status: response.status,
+      body: text
+    });
+    throw new Error(text);
+  }
+
+  const payload = (await response.json()) as {
+    data: {
+      itemId: string;
+      synced: boolean;
+      generateImageId?: string | null;
+      message: string;
+    };
+  };
+  console.info("[CHCY WEB] 手动查询结果 -> 请求成功", {
+    itemId: id,
+    payload
+  });
+  return payload;
+}
+
+export async function listCallbackAudits(limit = 50) {
+  const result = await safeFetchJson<
+    Array<{
+      id: string;
+      createdAt: string;
+      outcome: "accepted" | "rejected" | "ignored";
+      reason: string;
+      providerTaskId: string | null;
+      requestId: string | null;
+      body: Record<string, unknown>;
+    }>
+  >(`${API_BASE_URL}/callback-audits?limit=${limit}`, {
+    cache: "no-store"
+  });
+
+  return {
+    data: result.data ?? [],
+    error: result.error
+  };
+}
+
+export async function login(input: { email: string; password: string }) {
+  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{
+    data: {
+      token: string;
+      user: {
+        id: string;
+        email: string;
+        name: string;
+        role: string;
+        tenantId: string;
+      };
+    };
+  }>;
+}
+
+export async function getBootstrapUser() {
+  const result = await safeFetchJson<{
+    data: {
+      email: string;
+      passwordHint: string;
+    };
+  }>(`${API_BASE_URL}/auth/bootstrap-user`, {
+    cache: "no-store"
+  });
+
+  return {
+    data: result.data?.data ?? null,
+    error: result.error
+  };
+}
+
+export async function getSystemSettings() {
+  const response = await fetch(`${API_BASE_URL}/system-settings`, {
+    cache: "no-store"
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{ data: SystemSettings }>;
+}
+
+export async function updateSystemSettings(payload: SystemSettings) {
+  const response = await fetch(`${API_BASE_URL}/system-settings`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{ data: SystemSettings }>;
+}

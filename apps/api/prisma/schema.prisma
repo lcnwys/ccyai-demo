@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum BatchJobType {
+  PRINTING_EXTRACT
+  IMAGE_GENERATE
+  EXTRACT_THEN_GENERATE
+}
+
+enum BatchJobStatus {
+  CREATED
+  RUNNING
+  PARTIAL_SUCCESS
+  SUCCESS
+  FAILED
+}
+
+enum BatchItemStatus {
+  PENDING
+  UPLOADING_PROVIDER
+  SUBMITTED
+  PROCESSING
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+enum BatchItemStep {
+  EXTRACT
+  GENERATE
+  DONE
+}
+
+enum FileSourceType {
+  ORIGINAL
+  EXTRACTED
+  GENERATED
+  EXPORT
+}
+
+enum ProviderName {
+  CHCYAI
+}
+
+enum ProviderTaskType {
+  PRINTING
+  IMAGE
+}
+
+model Tenant {
+  id             String       @id @default(cuid())
+  name           String
+  status         String       @default("ACTIVE")
+  planType       String?
+  balance        Decimal      @default(0)
+  maxConcurrency Int          @default(5)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  users          User[]
+  files          FileAsset[]
+  batchJobs      BatchJob[]
+}
+
+model User {
+  id           String    @id @default(cuid())
+  tenantId     String
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         String    @default("CUSTOMER")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+}
+
+model FileAsset {
+  id             String         @id @default(cuid())
+  tenantId       String
+  sourceType     FileSourceType
+  fileName       String
+  ossKey         String
+  size           Int
+  mimeType       String
+  sha256         String?
+  providerFileId String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  tenant         Tenant         @relation(fields: [tenantId], references: [id])
+}
+
+model BatchJob {
+  id            String          @id @default(cuid())
+  tenantId      String
+  type          BatchJobType
+  name          String
+  status        BatchJobStatus  @default(CREATED)
+  totalCount    Int             @default(0)
+  successCount  Int             @default(0)
+  failedCount   Int             @default(0)
+  configJson    Json
+  createdBy     String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  tenant        Tenant          @relation(fields: [tenantId], references: [id])
+  items         BatchJobItem[]
+}
+
+model BatchJobItem {
+  id            String           @id @default(cuid())
+  batchJobId    String
+  tenantId      String
+  sourceFileId  String?
+  status        BatchItemStatus  @default(PENDING)
+  step          BatchItemStep    @default(EXTRACT)
+  prompt        String?
+  resolutionId  Int?
+  aspectRatioId Int?
+  errorCode     String?
+  errorMessage  String?
+  resultFileId  String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  batchJob      BatchJob         @relation(fields: [batchJobId], references: [id])
+  providerTasks ProviderTask[]
+}
+
+model ProviderTask {
+  id              String           @id @default(cuid())
+  batchJobItemId  String
+  provider        ProviderName
+  taskType        ProviderTaskType
+  providerTaskId  String
+  requestPayload  Json?
+  responsePayload Json?
+  callbackPayload Json?
+  status          String           @default("SUBMITTED")
+  retryCount      Int              @default(0)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  batchJobItem    BatchJobItem     @relation(fields: [batchJobItemId], references: [id])
+}

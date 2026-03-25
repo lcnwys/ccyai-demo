@@ -1,0 +1,101 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    command: --default-authentication-plugin=mysql_native_password
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7.2
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      APP_LOGIN_EMAIL: ${APP_LOGIN_EMAIL}
+      APP_LOGIN_PASSWORD: ${APP_LOGIN_PASSWORD}
+      APP_SESSION_SECRET: ${APP_SESSION_SECRET}
+      CHCY_API_BASE_URL: ${CHCY_API_BASE_URL}
+      CHCY_ACCESS_KEY: ${CHCY_ACCESS_KEY}
+      CHCY_SECRET_KEY: ${CHCY_SECRET_KEY}
+      CHCY_CALLBACK_BASE_URL: ${CHCY_CALLBACK_BASE_URL}
+      ALI_OSS_REGION: ${ALI_OSS_REGION}
+      ALI_OSS_BUCKET: ${ALI_OSS_BUCKET}
+      ALI_OSS_ACCESS_KEY_ID: ${ALI_OSS_ACCESS_KEY_ID}
+      ALI_OSS_ACCESS_KEY_SECRET: ${ALI_OSS_ACCESS_KEY_SECRET}
+    ports:
+      - "${API_PORT:-3001}:3001"
+    volumes:
+      - app_storage:/app/storage
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mysql
+      - redis
+      - api
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CHCY_API_BASE_URL: ${CHCY_API_BASE_URL}
+      CHCY_ACCESS_KEY: ${CHCY_ACCESS_KEY}
+      CHCY_SECRET_KEY: ${CHCY_SECRET_KEY}
+      CHCY_CALLBACK_BASE_URL: ${CHCY_CALLBACK_BASE_URL}
+      ALI_OSS_REGION: ${ALI_OSS_REGION}
+      ALI_OSS_BUCKET: ${ALI_OSS_BUCKET}
+      ALI_OSS_ACCESS_KEY_ID: ${ALI_OSS_ACCESS_KEY_ID}
+      ALI_OSS_ACCESS_KEY_SECRET: ${ALI_OSS_ACCESS_KEY_SECRET}
+    volumes:
+      - app_storage:/app/storage
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  mysql_data:
+  redis_data:
+  app_storage:
