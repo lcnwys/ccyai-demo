@@ -30,9 +30,9 @@ export class RuntimeConfigService {
   private getDefaults(): RuntimeSettings {
     return {
       app: {
-        loginEmail: process.env.APP_LOGIN_EMAIL ?? "sales@chcy.local",
-        loginPassword: process.env.APP_LOGIN_PASSWORD ?? "chcy123456",
-        sessionSecret: process.env.APP_SESSION_SECRET ?? "chcy-internal-session-secret"
+        loginEmail: process.env.APP_LOGIN_EMAIL ?? "",
+        loginPassword: process.env.APP_LOGIN_PASSWORD ?? "",
+        sessionSecret: process.env.APP_SESSION_SECRET ?? "change_me_before_production"
       },
       chcy: {
         apiBaseUrl: process.env.CHCY_API_BASE_URL ?? "https://api.chcyai.com",
@@ -145,3 +145,4 @@ export class RuntimeConfigService {
     };
   }
 }
+

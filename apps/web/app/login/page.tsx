@@ -17,10 +17,7 @@ export default async function LoginPage() {
 
   return (
     <section className="mx-auto flex min-h-[calc(100vh-140px)] max-w-[520px] items-center">
-      <LoginForm
-        defaultEmail={bootstrap.data?.email ?? "sales@chcy.local"}
-        passwordHint={bootstrap.data?.passwordHint ?? "chcy123456"}
-      />
+      <LoginForm defaultEmail={bootstrap.data?.email ?? ""} />
     </section>
   );
 }

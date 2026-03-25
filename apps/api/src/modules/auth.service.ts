@@ -138,8 +138,7 @@ export class AuthService {
   getBootstrapInfo() {
     return this.runtimeConfigService.load().then((settings) => ({
       data: {
-        email: settings.app.loginEmail,
-        passwordHint: settings.app.loginPassword
+        email: settings.app.loginEmail
       }
     }));
   }

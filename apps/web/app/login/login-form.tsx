@@ -5,16 +5,14 @@ import { useState, useTransition } from "react";
 import { login } from "../lib/api";
 
 export function LoginForm({
-  defaultEmail,
-  passwordHint
+  defaultEmail
 }: {
   defaultEmail: string;
-  passwordHint: string;
 }) {
   const router = useRouter();
   const [email, setEmail] = useState(defaultEmail);
-  const [password, setPassword] = useState(passwordHint);
-  const [message, setMessage] = useState("请输入内部测试账号登录。");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("请输入内部账号登录。");
   const [isPending, startTransition] = useTransition();
 
   return (
@@ -26,7 +24,7 @@ export function LoginForm({
         销售测试登录
       </h1>
       <p className="mt-4 text-sm leading-7 text-white/52">
-        这套平台当前只面向内部销售和小范围客户测试，不做复杂权限模型。
+        这套平台当前只面向内部销售和小范围客户测试。
       </p>
 
       <div className="mt-8 grid gap-4">
@@ -47,10 +45,6 @@ export function LoginForm({
             className="rounded-2xl border border-[#c79b2c]/18 bg-[#15130f] px-4 py-3 text-sm text-[#fff7dc] outline-none transition focus:border-[#d4af37]"
           />
         </label>
-      </div>
-
-      <div className="mt-6 rounded-[1.25rem] border border-[#d6b25e]/10 bg-black/18 p-4 text-sm leading-7 text-white/55">
-        默认测试账号：{defaultEmail}
       </div>
 
       <div className="mt-6 flex flex-col gap-3">
