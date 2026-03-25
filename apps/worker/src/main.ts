@@ -23,12 +23,30 @@ const redisConnection = {
   maxRetriesPerRequest: null as null
 };
 
+type ChcyCredentials = {
+  accessKey?: string;
+  secretKey?: string;
+};
+
 function safeJobId(...parts: Array<string | undefined>) {
   return parts.filter(Boolean).join("__");
 }
 
 function uniquePollingJobId(...parts: Array<string | undefined>) {
   return `${safeJobId(...parts)}__${Date.now()}__${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function resolveChcyCredentialsForUser(userId: string): Promise<ChcyCredentials | undefined> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+
+  if (user?.chcyAccessKey && user?.chcySecretKey) {
+    return {
+      accessKey: user.chcyAccessKey,
+      secretKey: user.chcySecretKey
+    };
+  }
+
+  return undefined;
 }
 
 async function enqueuePolling(payload: QueueJobPayload, delay = 20000) {
@@ -91,7 +109,7 @@ async function refreshBatchJob(batchJobId: string) {
   });
 }
 
-async function ensureProviderFileId(fileId: string) {
+async function ensureProviderFileId(fileId: string, credentials?: ChcyCredentials) {
   const file = await prisma.fileAsset.findUnique({ where: { id: fileId } });
   if (!file) {
     throw new Error(`source file not found: ${fileId}`);
@@ -102,11 +120,14 @@ async function ensureProviderFileId(fileId: string) {
   }
 
   const buffer = await oss.getBuffer(file.ossKey);
-  const upload = await chcy.uploadFile({
-    fileName: file.fileName,
-    contentType: file.mimeType,
-    buffer
-  });
+  const upload = await chcy.uploadFile(
+    {
+      fileName: file.fileName,
+      contentType: file.mimeType,
+      buffer
+    },
+    credentials
+  );
 
   await prisma.fileAsset.update({
     where: { id: file.id },
@@ -143,27 +164,28 @@ function extractGenerateImageId(result: unknown) {
   return payload?.data?.generateImageId;
 }
 
-async function persistResultFile(input: {
-  itemId: string;
-  tenantId: string;
-  generateImageId?: string;
-  sourceType: FileSourceType;
-  fileNamePrefix: string;
-  folder: string;
-}) {
+async function persistResultFile(
+  input: {
+    itemId: string;
+    tenantId: string;
+    generateImageId?: string;
+    sourceType: FileSourceType;
+    fileNamePrefix: string;
+    folder: string;
+  },
+  credentials?: ChcyCredentials
+) {
   if (!input.generateImageId) {
     return null;
   }
 
-  const item = await prisma.batchJobItem.findUnique({
-    where: { id: input.itemId }
-  });
+  const item = await prisma.batchJobItem.findUnique({ where: { id: input.itemId } });
 
   if (!item) {
     throw new Error(`batch item not found: ${input.itemId}`);
   }
 
-  const fileInfo = await chcy.getFileDownloadUrl(input.generateImageId);
+  const fileInfo = await chcy.getFileDownloadUrl(input.generateImageId, credentials);
   const downloadUrl = fileInfo.data;
   const downloadResponse = await fetch(downloadUrl);
 
@@ -213,27 +235,37 @@ async function handlePrinting(job: Job<QueueJobPayload>) {
     throw new Error("印花提取任务缺少原图，无法提交。");
   }
 
-  const item = await prisma.batchJobItem.findUnique({ where: { id: job.data.itemId } });
+  const item = await prisma.batchJobItem.findUnique({
+    where: { id: job.data.itemId },
+    include: {
+      batchJob: true
+    }
+  });
   if (!item) {
     throw new Error(`batch item not found: ${job.data.itemId}`);
   }
+
+  const credentials = await resolveChcyCredentialsForUser(item.batchJob.createdBy);
 
   await prisma.batchJobItem.update({
     where: { id: item.id },
     data: { status: BatchItemStatus.UPLOADING_PROVIDER }
   });
 
-  const { file, providerFileId } = await ensureProviderFileId(job.data.sourceFileId);
+  const { file, providerFileId } = await ensureProviderFileId(job.data.sourceFileId, credentials);
   const settings = await loadRuntimeSettings();
   const callbackUrl = `${settings.chcy?.callbackBaseUrl ?? process.env.CHCY_CALLBACK_BASE_URL}/api/callbacks/chcyai`;
-  const taskResponse = await chcy.createPrintingTask({
-    callbackUrl,
-    referenceImageId: providerFileId,
-    fileName: file.fileName,
-    prompt: item.prompt ?? undefined,
-    resolutionRatioId: item.resolutionId ?? 1,
-    isPatternCompleted: 1
-  });
+  const taskResponse = await chcy.createPrintingTask(
+    {
+      callbackUrl,
+      referenceImageId: providerFileId,
+      fileName: file.fileName,
+      prompt: item.prompt ?? undefined,
+      resolutionRatioId: item.resolutionId ?? 1,
+      isPatternCompleted: 1
+    },
+    credentials
+  );
 
   await prisma.providerTask.create({
     data: {
@@ -282,23 +314,23 @@ async function handleImage(job: Job<QueueJobPayload>) {
     throw new Error(`batch item not found: ${job.data.itemId}`);
   }
 
+  const credentials = await resolveChcyCredentialsForUser(item.batchJob.createdBy);
+
   let referenceImageId: string | undefined;
   const printingTask = item.providerTasks.find((task) => task.taskType === ProviderTaskType.PRINTING);
   const callbackData = printingTask?.callbackPayload as { data?: { generateImageId?: string } } | null;
   referenceImageId = callbackData?.data?.generateImageId;
 
   if (!referenceImageId && item.sourceFileId) {
-    const ensured = await ensureProviderFileId(item.sourceFileId);
+    const ensured = await ensureProviderFileId(item.sourceFileId, credentials);
     referenceImageId = ensured.providerFileId;
   }
 
   const settings = await loadRuntimeSettings();
   const callbackUrl = `${settings.chcy?.callbackBaseUrl ?? process.env.CHCY_CALLBACK_BASE_URL}/api/callbacks/chcyai`;
-  const capability = (item.batchJob.configJson as { capability?: string; similarity?: number } | null)
-    ?.capability;
+  const capability = (item.batchJob.configJson as { capability?: string; similarity?: number } | null)?.capability;
   const similarity =
-    (item.batchJob.configJson as { capability?: string; similarity?: number } | null)
-      ?.similarity ?? 0.72;
+    (item.batchJob.configJson as { capability?: string; similarity?: number } | null)?.similarity ?? 0.72;
 
   if (capability === "fission" && !referenceImageId) {
     throw new Error("图裂变任务必须提供参考图。");
@@ -306,22 +338,28 @@ async function handleImage(job: Job<QueueJobPayload>) {
 
   const taskResponse =
     capability === "fission"
-      ? await chcy.createFissionTask({
-          callbackUrl,
-          prompt: item.prompt ?? "围绕当前主题进行多版本裂变，保留主视觉气质和商业可用性",
-          fileName: undefined,
-          referenceImageId: referenceImageId!,
-          similarity,
-          resolutionRatioId: item.resolutionId ?? 1,
-          aspectRatio: item.aspectRatioId ?? 0
-        })
-      : await chcy.createImageTask({
-          callbackUrl,
-          prompt: item.prompt ?? "请生成高质量图像",
-          referenceImageIdList: referenceImageId ? [referenceImageId] : undefined,
-          aspectRatioId: item.aspectRatioId ?? undefined,
-          resolutionRatioId: item.resolutionId ?? 1
-        });
+      ? await chcy.createFissionTask(
+          {
+            callbackUrl,
+            prompt: item.prompt ?? "围绕当前主题进行多版本裂变，保留主视觉气质和商业可用性",
+            fileName: undefined,
+            referenceImageId: referenceImageId!,
+            similarity,
+            resolutionRatioId: item.resolutionId ?? 1,
+            aspectRatio: item.aspectRatioId ?? 0
+          },
+          credentials
+        )
+      : await chcy.createImageTask(
+          {
+            callbackUrl,
+            prompt: item.prompt ?? "请生成高质量图像",
+            referenceImageIdList: referenceImageId ? [referenceImageId] : undefined,
+            aspectRatioId: item.aspectRatioId ?? undefined,
+            resolutionRatioId: item.resolutionId ?? 1
+          },
+          credentials
+        );
 
   await prisma.providerTask.create({
     data: {
@@ -383,6 +421,8 @@ async function handlePolling(job: Job<QueueJobPayload>) {
     throw new Error(`batch item not found: ${job.data.itemId}`);
   }
 
+  const credentials = await resolveChcyCredentialsForUser(item.batchJob.createdBy);
+
   const activeTask = item.providerTasks.find(
     (task) =>
       (
@@ -410,10 +450,10 @@ async function handlePolling(job: Job<QueueJobPayload>) {
   try {
     const result =
       activeTask.taskType === ProviderTaskType.PRINTING
-        ? await chcy.getPrintingTaskInfo(activeTask.providerTaskId)
+        ? await chcy.getPrintingTaskInfo(activeTask.providerTaskId, credentials)
         : ((item.batchJob.configJson as { capability?: string } | null)?.capability === "fission"
-            ? await chcy.getFissionTaskInfo(activeTask.providerTaskId)
-            : await chcy.getImageTaskInfo(activeTask.providerTaskId));
+            ? await chcy.getFissionTaskInfo(activeTask.providerTaskId, credentials)
+            : await chcy.getImageTaskInfo(activeTask.providerTaskId, credentials));
 
     await prisma.providerTask.update({
       where: { id: activeTask.id },
@@ -437,14 +477,17 @@ async function handlePolling(job: Job<QueueJobPayload>) {
       const generateImageId = extractGenerateImageId(result);
 
       if (generateImageId && item.batchJob.type !== "EXTRACT_THEN_GENERATE") {
-        await persistResultFile({
-          itemId: item.id,
-          tenantId: item.tenantId,
-          generateImageId,
-          sourceType: FileSourceType.EXTRACTED,
-          fileNamePrefix: "extracted",
-          folder: "extracted"
-        });
+        await persistResultFile(
+          {
+            itemId: item.id,
+            tenantId: item.tenantId,
+            generateImageId,
+            sourceType: FileSourceType.EXTRACTED,
+            fileNamePrefix: "extracted",
+            folder: "extracted"
+          },
+          credentials
+        );
       }
 
       await prisma.batchJobItem.update({
@@ -462,14 +505,16 @@ async function handlePolling(job: Job<QueueJobPayload>) {
         const imageReferenceId = extractGenerateImageId(result);
         const settings = await loadRuntimeSettings();
 
-        const taskResponse = await chcy.createImageTask({
-          callbackUrl: `${settings.chcy?.callbackBaseUrl ?? process.env.CHCY_CALLBACK_BASE_URL}/api/callbacks/chcyai`,
-          prompt:
-            item.prompt ?? "保留主体风格，生成适合跨境电商使用的高质量印花图案",
-          referenceImageIdList: imageReferenceId ? [imageReferenceId] : undefined,
-          aspectRatioId: item.aspectRatioId ?? 0,
-          resolutionRatioId: item.resolutionId ?? 1
-        });
+        const taskResponse = await chcy.createImageTask(
+          {
+            callbackUrl: `${settings.chcy?.callbackBaseUrl ?? process.env.CHCY_CALLBACK_BASE_URL}/api/callbacks/chcyai`,
+            prompt: item.prompt ?? "保留主体风格，生成适合跨境电商使用的高质量印花图案",
+            referenceImageIdList: imageReferenceId ? [imageReferenceId] : undefined,
+            aspectRatioId: item.aspectRatioId ?? 0,
+            resolutionRatioId: item.resolutionId ?? 1
+          },
+          credentials
+        );
 
         await prisma.providerTask.create({
           data: {
@@ -495,14 +540,17 @@ async function handlePolling(job: Job<QueueJobPayload>) {
         );
       }
     } else {
-      await persistResultFile({
-        itemId: item.id,
-        tenantId: item.tenantId,
-        generateImageId: extractGenerateImageId(result),
-        sourceType: FileSourceType.GENERATED,
-        fileNamePrefix: "generated",
-        folder: "generated"
-      });
+      await persistResultFile(
+        {
+          itemId: item.id,
+          tenantId: item.tenantId,
+          generateImageId: extractGenerateImageId(result),
+          sourceType: FileSourceType.GENERATED,
+          fileNamePrefix: "generated",
+          folder: "generated"
+        },
+        credentials
+      );
 
       await prisma.batchJobItem.update({
         where: { id: item.id },
@@ -637,5 +685,3 @@ bootstrap().catch((error) => {
   logger.error(error);
   process.exit(1);
 });
-
-

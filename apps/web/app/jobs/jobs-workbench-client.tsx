@@ -41,7 +41,7 @@ function getCapabilityLabel(job: Pick<BatchJobSummary, "type" | "capability">) {
   if (job.capability === "fission") return "图裂变";
   if (job.type === "PRINTING_EXTRACT") return "印花提取";
   if (job.type === "IMAGE_GENERATE") return "AI 生图";
-  return "提取后生图";
+  return job.type;
 }
 
 function getResultInfo(
@@ -67,6 +67,20 @@ function getResultInfo(
   }
 
   return null;
+}
+
+function hasQueryableProviderTask(
+  providerTasks: BatchJobDetail["items"][number]["providerTasks"]
+) {
+  return providerTasks.some((task) =>
+    [
+      "SUBMITTED",
+      "CALLBACK_SUCCESS",
+      "POLLED_SUCCESS",
+      "MANUAL_SYNC_SUCCESS",
+      "POLLING_FAILED"
+    ].includes(task.status)
+  );
 }
 
 export function JobsWorkbenchClient({
@@ -165,7 +179,6 @@ export function JobsWorkbenchClient({
                 <option value="PRINTING_EXTRACT">印花提取</option>
                 <option value="IMAGE_GENERATE">AI 生图</option>
                 <option value="FISSION">图裂变</option>
-                <option value="EXTRACT_THEN_GENERATE">提取后生图</option>
               </select>
             </div>
           </div>
@@ -296,7 +309,7 @@ export function JobsWorkbenchClient({
                   </div>
                 </div>
                 <div className="xl:w-[340px]">
-                  <JobDetailClient batchJobId={selectedJob.id} status={selectedJob.status} />
+                  <JobDetailClient batchJobId={selectedJob.id} status={statusLabel[selectedJob.status] ?? selectedJob.status} queryableItemIds={selectedJob.items.filter((item) => hasQueryableProviderTask(item.providerTasks)).map((item) => item.id)} />
                 </div>
               </div>
             </div>
@@ -360,10 +373,10 @@ export function JobsWorkbenchClient({
                           </span>
                         </div>
                         <strong className="mt-3 block truncate text-sm text-white">{item.id}</strong>
-                        <p className="mt-2 line-clamp-2 text-xs leading-6 text-white/42">
-                          {item.prompt ?? "未填写描述"}
-                        </p>
-                        <p className="mt-2 text-xs text-white/32">步骤：{item.step}</p>
+                        <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                          <span className="rounded-full border border-white/8 bg-black/18 px-3 py-1 text-white/50">{item.step}</span>
+                          {item.errorMessage ? <span className="rounded-full border border-red-400/16 bg-red-500/10 px-3 py-1 text-red-300">异常</span> : null}
+                        </div>
                       </div>
                     </button>
                   );
@@ -436,13 +449,13 @@ export function JobsWorkbenchClient({
                               downloadPath={currentItem.resultDownloadPath}
                               fileName={currentItem.resultFile?.fileName ?? null}
                             />
-                            {currentItem.providerTasks.length ? <ManualSyncButton itemId={currentItem.id} compact /> : null}
+                            {hasQueryableProviderTask(currentItem.providerTasks) ? <ManualSyncButton itemId={currentItem.id} compact /> : null}
                           </div>
                         </>
                       ) : (
                         <div className="mt-3 space-y-3 rounded-[1rem] border border-dashed border-[#d6b25e]/15 bg-black/18 p-4 text-sm leading-7 text-white/48">
-                          <p>{currentItem.providerTasks.length ? "当前还没有结果文件，可直接手动查询一次结果。" : "当前还没有 provider 任务，先重试此项再查询。"}</p>
-                          {currentItem.providerTasks.length ? <ManualSyncButton itemId={currentItem.id} compact /> : null}
+                          <p>{hasQueryableProviderTask(currentItem.providerTasks) ? "当前还没有结果文件，可直接手动查询一次结果。" : "当前还没有 provider 任务，先重试此项再查询。"}</p>
+                          {hasQueryableProviderTask(currentItem.providerTasks) ? <ManualSyncButton itemId={currentItem.id} compact /> : null}
                         </div>
                       )}
                     </div>

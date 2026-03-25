@@ -1,53 +1,84 @@
-import { Body, Controller, Get, Logger, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Logger, Param, Post } from "@nestjs/common";
+import { AuthService } from "./auth.service";
 import { BatchJobsService, CreateBatchJobDto } from "./batch-jobs.service";
 
 @Controller("batch-jobs")
 export class BatchJobsController {
   private readonly logger = new Logger(BatchJobsController.name);
 
-  constructor(private readonly batchJobsService: BatchJobsService) {}
+  constructor(
+    private readonly batchJobsService: BatchJobsService,
+    private readonly authService: AuthService
+  ) {}
 
   @Get()
-  list() {
-    return this.batchJobsService.list();
+  async list(@Headers("authorization") authorization?: string) {
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.list(currentUser);
   }
 
   @Post()
-  create(@Body() body: CreateBatchJobDto) {
-    return this.batchJobsService.create(body);
+  async create(
+    @Headers("authorization") authorization: string | undefined,
+    @Body() body: CreateBatchJobDto
+  ) {
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.create(body, currentUser);
   }
 
   @Get(":id")
-  detail(@Param("id") id: string) {
-    return this.batchJobsService.detail(id);
+  async detail(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string
+  ) {
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.detail(id, currentUser);
   }
 
   @Post(":id/export")
-  export(@Param("id") id: string) {
-    return this.batchJobsService.export(id);
+  async export(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string
+  ) {
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.export(id, currentUser);
   }
 
   @Post(":id/retry")
-  retry(@Param("id") id: string) {
-    return this.batchJobsService.retry(id);
+  async retry(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string
+  ) {
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.retry(id, currentUser);
   }
 
   @Post("items/:id/retry")
-  retryItem(@Param("id") id: string) {
-    return this.batchJobsService.retryItem(id);
+  async retryItem(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string
+  ) {
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.retryItem(id, currentUser);
   }
 
   @Post("items/:id/print-export")
-  printExportItem(
+  async printExportItem(
+    @Headers("authorization") authorization: string | undefined,
     @Param("id") id: string,
     @Body() body: { dpi: number }
   ) {
-    return this.batchJobsService.exportPrintAsset(id, body.dpi);
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.exportPrintAsset(id, body.dpi, currentUser);
   }
 
   @Post("items/:id/sync-result")
-  syncItemResult(@Param("id") id: string) {
+  async syncItemResult(
+    @Headers("authorization") authorization: string | undefined,
+    @Param("id") id: string
+  ) {
     this.logger.log(`manual sync requested itemId=${id}`);
-    return this.batchJobsService.syncItemResult(id);
+    const currentUser = await this.authService.getCurrentUser(authorization);
+    return this.batchJobsService.syncItemResult(id, currentUser);
   }
 }

@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { buildApiUrl, getBatchJob } from "../../lib/api";
 import { JobDetailClient } from "./job-detail-client";
@@ -15,7 +16,9 @@ type PageProps = {
 
 export default async function JobDetailPage({ params }: PageProps) {
   const { id } = await params;
-  const result = await getBatchJob(id);
+  const cookieStore = await cookies();
+  const token = cookieStore.get("chcy_session")?.value;
+  const result = await getBatchJob(id, token);
   const job = result.data;
 
   if (result.error) {
@@ -76,16 +79,32 @@ export default async function JobDetailPage({ params }: PageProps) {
       ? "图裂变"
       : job.type === "PRINTING_EXTRACT"
         ? "印花提取"
-        : job.type === "IMAGE_GENERATE"
-          ? "AI 生图"
-          : "提取后生图";
+        : "AI 生图";
 
   const statusTone: Record<string, string> = {
     SUCCESS: "bg-emerald-500/12 text-emerald-300 ring-1 ring-emerald-400/16",
     FAILED: "bg-red-500/12 text-red-300 ring-1 ring-red-400/16",
     PARTIAL_SUCCESS: "bg-amber-500/12 text-amber-300 ring-1 ring-amber-400/16",
     RUNNING: "bg-sky-500/12 text-sky-300 ring-1 ring-sky-400/16",
-    CREATED: "bg-zinc-500/12 text-zinc-300 ring-1 ring-zinc-400/16"
+    CREATED: "bg-zinc-500/12 text-zinc-300 ring-1 ring-zinc-400/16",
+    SUBMITTED: "bg-[#d6b25e]/10 text-champagne ring-1 ring-[#d6b25e]/16",
+    PROCESSING: "bg-sky-500/12 text-sky-300 ring-1 ring-sky-400/16",
+    RETRYING: "bg-violet-500/12 text-violet-300 ring-1 ring-violet-400/16"
+  };
+
+  const statusLabel: Record<string, string> = {
+    SUCCESS: "已完成",
+    FAILED: "失败",
+    PARTIAL_SUCCESS: "部分成功",
+    RUNNING: "处理中",
+    CREATED: "已创建",
+    SUBMITTED: "已提交",
+    PROCESSING: "处理中",
+    RETRYING: "重试中",
+    POLLED_SUCCESS: "已查询成功",
+    MANUAL_SYNC_SUCCESS: "手动查询成功",
+    CALLBACK_SUCCESS: "回调成功",
+    POLLING_FAILED: "查询失败"
   };
 
   function getResultInfo(
@@ -133,6 +152,20 @@ export default async function JobDetailPage({ params }: PageProps) {
     return null;
   }
 
+  function hasQueryableProviderTask(
+    providerTasks: Array<{ status: string }>
+  ) {
+    return providerTasks.some((task) =>
+      [
+        "SUBMITTED",
+        "CALLBACK_SUCCESS",
+        "POLLED_SUCCESS",
+        "MANUAL_SYNC_SUCCESS",
+        "POLLING_FAILED"
+      ].includes(task.status)
+    );
+  }
+
   function formatDateTime(value?: string | null) {
     if (!value) return "未知";
     return new Date(value).toLocaleString("zh-CN", {
@@ -150,17 +183,13 @@ export default async function JobDetailPage({ params }: PageProps) {
             <h1 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-champagne sm:text-4xl md:text-5xl">
               {job.name}
             </h1>
-            <p className="mt-3 max-w-4xl text-sm leading-7 text-white/52 md:text-base">
-              状态 {job.status} · 能力 {capabilityLabel} · 总数 {job.totalCount} · 成功{" "}
-              {job.successCount} · 失败 {job.failedCount}
-            </p>
             <div className="mt-5 flex flex-wrap items-center gap-3 text-xs font-semibold">
               <span
                 className={`rounded-full px-3 py-1 ${
                   statusTone[job.status] ?? "bg-zinc-500/12 text-zinc-300"
                 }`}
               >
-                {job.status}
+                {statusLabel[job.status] ?? job.status}
               </span>
               <span className="rounded-full border border-[#d6b25e]/12 bg-[#d6b25e]/8 px-3 py-1 text-champagne">
                 {capabilityLabel}
@@ -171,7 +200,7 @@ export default async function JobDetailPage({ params }: PageProps) {
             </div>
           </div>
           <div className="rounded-[1.8rem] border border-white/8 bg-white/[0.035] p-6 backdrop-blur-xl">
-            <JobDetailClient batchJobId={job.id} status={job.status} />
+            <JobDetailClient batchJobId={job.id} status={statusLabel[job.status] ?? job.status} queryableItemIds={job.items.filter((item) => hasQueryableProviderTask(item.providerTasks)).map((item) => item.id)} />
           </div>
       </div>
 
@@ -184,9 +213,6 @@ export default async function JobDetailPage({ params }: PageProps) {
             <h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-white">
               当前批次下全部任务项
             </h2>
-            <p className="mt-2 text-sm leading-7 text-white/48">
-            先看这一批里有多少张图、哪些已成功、哪些还在处理中，再往下看单项详情。
-            </p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs">
             <span className="rounded-full border border-emerald-400/16 bg-emerald-500/10 px-3 py-1 text-emerald-300">
@@ -236,18 +262,22 @@ export default async function JobDetailPage({ params }: PageProps) {
                           statusTone[item.status] ?? "bg-zinc-500/12 text-zinc-300"
                         }`}
                       >
-                        {item.status}
+                        {statusLabel[item.status] ?? item.status}
                       </span>
                     </div>
                     <strong className="mt-3 block truncate text-sm text-white">
                       {item.id}
                     </strong>
-                    <p className="mt-2 line-clamp-2 text-xs leading-6 text-white/42">
-                      {item.prompt ?? "未填写描述"}
-                    </p>
-                    <p className="mt-2 text-xs text-white/32">
-                      步骤：{item.step}
-                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                      <span className="rounded-full border border-white/8 bg-black/18 px-3 py-1 text-white/50">
+                        {item.step}
+                      </span>
+                      {item.errorMessage ? (
+                        <span className="rounded-full border border-red-400/16 bg-red-500/10 px-3 py-1 text-red-300">
+                          异常
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               </a>
@@ -269,25 +299,24 @@ export default async function JobDetailPage({ params }: PageProps) {
               id={`item-${item.id}`}
               className="rounded-[1.75rem] border border-white/8 bg-white/[0.035] p-5 backdrop-blur-xl sm:p-6"
             >
-              <div className="mb-5 grid gap-4 border-b border-white/8 pb-5 lg:grid-cols-[180px_1fr_auto] lg:items-center">
-                <div className="overflow-hidden rounded-[1.2rem] border border-[#d6b25e]/10 bg-black/30">
-                  {resultPreviewPath || sourcePreviewPath ? (
-                    <img
-                      src={buildApiUrl(resultPreviewPath ?? sourcePreviewPath!)}
-                      alt={item.id}
-                      className="h-40 w-full object-contain"
-                    />
-                  ) : (
-                    <div className="flex h-40 items-center justify-center text-sm text-white/28">
-                      文生图
-                    </div>
-                  )}
-                </div>
-                <div>
+              <div className="mb-5 grid gap-4 border-b border-white/8 pb-5 lg:grid-cols-[1fr_auto] lg:items-center">
+                <div className="space-y-2">
                   <strong className="break-all text-base text-white sm:text-lg">{item.id}</strong>
-                  <p className="mt-2 text-xs uppercase tracking-[0.16em] text-white/28">
-                    {item.step} · {item.prompt ?? "未填写描述"}
-                  </p>
+                  <div className="flex flex-wrap gap-2 text-[11px]">
+                    <span className="rounded-full border border-white/8 bg-black/18 px-3 py-1 text-white/55">
+                      {item.step}
+                    </span>
+                    {item.resultFile?.fileName ? (
+                      <span className="rounded-full border border-[#d6b25e]/12 bg-[#d6b25e]/8 px-3 py-1 text-champagne">
+                        已归档
+                      </span>
+                    ) : null}
+                    {item.errorMessage ? (
+                      <span className="rounded-full border border-red-400/16 bg-red-500/10 px-3 py-1 text-red-300">
+                        异常
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="flex items-center gap-3 lg:flex-col lg:items-end">
                   {item.status === "FAILED" ? (
@@ -298,7 +327,7 @@ export default async function JobDetailPage({ params }: PageProps) {
                       statusTone[item.status] ?? "bg-zinc-500/12 text-zinc-300"
                     }`}
                   >
-                    {item.status}
+                    {statusLabel[item.status] ?? item.status}
                   </span>
                 </div>
               </div>
@@ -327,7 +356,7 @@ export default async function JobDetailPage({ params }: PageProps) {
                   </div>
                   <div className="rounded-[1.4rem] border border-[#d6b25e]/10 bg-black/18 p-4">
                     <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-[#b89b54]">
-                      {item.resultDownloadPath ? "提取图" : "结果区"}
+                      {item.resultDownloadPath ? "提取图" : "结果图"}
                     </p>
                     <div className="overflow-hidden rounded-[1rem] border border-white/8 bg-black/30">
                       {resultPreviewPath ? (
@@ -345,7 +374,7 @@ export default async function JobDetailPage({ params }: PageProps) {
                   </div>
                 </div>
 
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   {item.resultDownloadPath ? (
                     <a
                       href={buildApiUrl(item.resultDownloadPath)}
@@ -361,55 +390,52 @@ export default async function JobDetailPage({ params }: PageProps) {
                     downloadPath={item.resultDownloadPath}
                     fileName={item.resultFile?.fileName ?? null}
                   />
-                  {item.providerTasks.length ? <ManualSyncButton itemId={item.id} compact /> : null}
+                  {hasQueryableProviderTask(item.providerTasks) ? <ManualSyncButton itemId={item.id} compact /> : null}
                 </div>
 
                 <details className="rounded-[1.2rem] border border-white/8 bg-black/18 p-4">
                   <summary className="cursor-pointer list-none text-sm font-medium text-white/72">
                     查看详情
                   </summary>
-                  <div className="mt-4 grid gap-4 text-sm leading-7 text-white/58 lg:grid-cols-2">
+                  <div className="mt-4 grid gap-3 text-sm leading-7 text-white/58 lg:grid-cols-2">
                     <div className="space-y-2">
                       <p className="break-all">源文件：{item.sourceFileId ?? "未上传，当前为文生图"}</p>
                       <p>结果文件：{item.resultFile?.fileName ?? "待归档"}</p>
-                      <p className={item.errorMessage ? "text-red-300" : "text-white/42"}>
-                        错误信息：{item.errorMessage ?? "无"}
-                      </p>
+                      <p>状态：{statusLabel[item.status] ?? item.status}</p>
+                      {item.errorMessage ? (
+                        <p className="break-all text-red-300">错误信息：{item.errorMessage}</p>
+                      ) : null}
                     </div>
                     <div className="space-y-2">
-                      <p>状态：{item.status}</p>
-                      <p>步骤：{item.step}</p>
                       {resultInfo ? (
                         <>
                           <p>Provider 状态：{resultInfo.providerStatus}</p>
                           <p className="break-all">结果图 ID：{resultInfo.generateImageId}</p>
                           <p className="break-all">requestId：{resultInfo.requestId ?? "未返回"}</p>
                         </>
-                      ) : null}
+                      ) : (
+                        <p className="text-white/42">当前没有可查询的结果回写信息。</p>
+                      )}
                     </div>
                   </div>
                   {item.providerTasks.length ? (
                     <div className="mt-4 border-t border-white/8 pt-4">
-                      <div className="grid gap-3">
+                      <div className="grid gap-2">
                         {item.providerTasks.map((task) => (
                           <div
                             key={task.id}
-                            className="rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3 text-sm text-white/65"
+                            className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/6 bg-white/[0.03] px-4 py-3 text-sm text-white/65"
                           >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
                               <strong className="text-white">{task.taskType}</strong>
-                              <span className="rounded-full border border-[#d6b25e]/10 bg-black/20 px-3 py-1 text-[11px] font-semibold text-champagne">
-                                {task.status}
-                              </span>
+                              <p className="mt-1 break-all text-xs text-white/42">{task.providerTaskId}</p>
                             </div>
-                            <p className="mt-2 break-all">任务ID：{task.providerTaskId}</p>
-                            <p className="mt-1">重试次数：{task.retryCount}</p>
-                            <p className="mt-1 text-xs text-white/38">
-                              创建时间：
-                              {new Date(task.createdAt).toLocaleString("zh-CN", {
-                                hour12: false
-                              })}
-                            </p>
+                            <div className="flex items-center gap-2 text-[11px]">
+                              <span className="rounded-full border border-[#d6b25e]/10 bg-black/20 px-3 py-1 font-semibold text-champagne">
+                                {statusLabel[task.status] ?? task.status}
+                              </span>
+                              <span className="text-white/35">重试 {task.retryCount}</span>
+                            </div>
                           </div>
                         ))}
                       </div>

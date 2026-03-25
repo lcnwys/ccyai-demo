@@ -40,31 +40,46 @@ export class CallbackService {
       .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
       .join("&");
 
-    const bodyHash = crypto
-      .createHash("sha256")
-      .update(input.body ?? "", "utf8")
-      .digest("hex");
+    const bodyHash = crypto.createHash("sha256").update(input.body ?? "", "utf8").digest("hex");
+    const content = [input.method.toUpperCase(), input.path, queryString, bodyHash, input.timestamp, input.nonce].join("\n");
 
-    const content = [
-      input.method.toUpperCase(),
-      input.path,
-      queryString,
-      bodyHash,
-      input.timestamp,
-      input.nonce
-    ].join("\n");
+    return crypto.createHmac("sha256", input.secretKey).update(content, "utf8").digest("base64url");
+  }
 
-    return crypto
-      .createHmac("sha256", input.secretKey)
-      .update(content, "utf8")
-      .digest("base64url");
+  private async resolveCallbackCredentials(providerTaskId: string) {
+    const providerTask = await this.prisma.providerTask.findFirst({
+      where: { providerTaskId },
+      include: {
+        batchJobItem: {
+          include: {
+            batchJob: true
+          }
+        }
+      }
+    });
+
+    if (!providerTask) {
+      return { providerTask: null, accessKey: "", secretKey: "" };
+    }
+
+    const owner = await this.prisma.user.findUnique({
+      where: { id: providerTask.batchJobItem.batchJob.createdBy }
+    });
+    const settings = await this.runtimeConfigService.load();
+
+    return {
+      providerTask,
+      accessKey: owner?.chcyAccessKey ?? settings.chcy.accessKey,
+      secretKey: owner?.chcySecretKey ?? settings.chcy.secretKey
+    };
   }
 
   private async verifyCallback(input: {
     headers: Record<string, string | string[] | undefined>;
     rawBody?: Buffer;
+    accessKey: string;
+    secretKey: string;
   }) {
-    const settings = await this.runtimeConfigService.load();
     const signature = String(input.headers["x-signature"] ?? "");
     const timestamp = String(input.headers["x-timestamp"] ?? "");
     const nonce = String(input.headers["x-nonce"] ?? "");
@@ -74,7 +89,7 @@ export class CallbackService {
       throw new UnauthorizedException("missing callback signature headers");
     }
 
-    if (settings.chcy.accessKey && accessKey && accessKey !== settings.chcy.accessKey) {
+    if (input.accessKey && accessKey && accessKey !== input.accessKey) {
       throw new UnauthorizedException("invalid callback access key");
     }
 
@@ -95,7 +110,7 @@ export class CallbackService {
       body: input.rawBody?.toString("utf8") ?? "",
       timestamp,
       nonce,
-      secretKey: settings.chcy.secretKey
+      secretKey: input.secretKey
     });
 
     if (signature !== expectedSignature) {
@@ -113,25 +128,6 @@ export class CallbackService {
     const providerTaskId = String(input.body.taskId ?? input.body.requestId ?? "");
     const requestId = String(input.body.requestId ?? "");
 
-    try {
-      await this.verifyCallback({
-        headers: input.headers,
-        rawBody: input.rawBody
-      });
-    } catch (error) {
-      await this.callbackAuditService.record({
-        id: randomUUID(),
-        createdAt: new Date().toISOString(),
-        outcome: "rejected",
-        reason: error instanceof Error ? error.message : "signature_verification_failed",
-        providerTaskId: providerTaskId || null,
-        requestId: requestId || null,
-        headers: input.headers,
-        body: input.body
-      });
-      throw error;
-    }
-
     if (!providerTaskId) {
       await this.callbackAuditService.record({
         id: randomUUID(),
@@ -146,16 +142,7 @@ export class CallbackService {
       return { accepted: false, reason: "missing_task_id" };
     }
 
-    const providerTask = await this.prisma.providerTask.findFirst({
-      where: { providerTaskId },
-      include: {
-        batchJobItem: {
-          include: {
-            batchJob: true
-          }
-        }
-      }
-    });
+    const { providerTask, accessKey, secretKey } = await this.resolveCallbackCredentials(providerTaskId);
 
     if (!providerTask) {
       await this.callbackAuditService.record({
@@ -169,6 +156,27 @@ export class CallbackService {
         body: input.body
       });
       return { accepted: false, reason: "provider_task_not_found" };
+    }
+
+    try {
+      await this.verifyCallback({
+        headers: input.headers,
+        rawBody: input.rawBody,
+        accessKey,
+        secretKey
+      });
+    } catch (error) {
+      await this.callbackAuditService.record({
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        outcome: "rejected",
+        reason: error instanceof Error ? error.message : "signature_verification_failed",
+        providerTaskId: providerTaskId || null,
+        requestId: requestId || null,
+        headers: input.headers,
+        body: input.body
+      });
+      throw error;
     }
 
     await this.prisma.providerTask.update({
@@ -194,15 +202,18 @@ export class CallbackService {
       });
 
       if (item.batchJob.type === "EXTRACT_THEN_GENERATE") {
-        await this.queueService.enqueueImageJob({
-          tenantId: item.tenantId,
-          batchJobId: item.batchJobId,
-          itemId: item.id,
-          sourceFileId: item.sourceFileId ?? undefined,
-          prompt: item.prompt ?? undefined,
-          aspectRatioId: item.aspectRatioId ?? undefined,
-          resolutionId: item.resolutionId ?? undefined
-        });
+        await this.queueService.enqueueImageJob(
+          {
+            tenantId: item.tenantId,
+            batchJobId: item.batchJobId,
+            itemId: item.id,
+            sourceFileId: item.sourceFileId ?? "",
+            prompt: item.prompt ?? undefined,
+            aspectRatioId: item.aspectRatioId ?? undefined,
+            resolutionId: item.resolutionId ?? undefined
+          },
+          { forceUnique: true }
+        );
       }
     }
 
@@ -230,9 +241,7 @@ export class CallbackService {
       }
     });
 
-    const totalCount = await this.prisma.batchJobItem.count({
-      where: { batchJobId: item.batchJobId }
-    });
+    const totalCount = await this.prisma.batchJobItem.count({ where: { batchJobId: item.batchJobId } });
 
     await this.prisma.batchJob.update({
       where: { id: item.batchJobId },
@@ -262,3 +271,4 @@ export class CallbackService {
     return { accepted: true, providerTaskId };
   }
 }
+

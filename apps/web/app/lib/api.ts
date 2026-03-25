@@ -5,16 +5,39 @@ export function buildApiUrl(path: string) {
   return `${API_BASE_URL.replace(/\/api$/, "")}${path}`;
 }
 
-type ApiErrorResult = {
-  error: string | null;
-};
+function readClientSessionToken() {
+  if (typeof document === "undefined") {
+    return undefined;
+  }
+
+  const value = document.cookie
+    .split("; ")
+    .find((item) => item.startsWith("chcy_session="));
+
+  return value ? decodeURIComponent(value.split("=")[1] ?? "") : undefined;
+}
+
+function buildAuthHeaders(token?: string, headers?: HeadersInit) {
+  const resolvedToken = token ?? readClientSessionToken();
+  const nextHeaders = new Headers(headers);
+
+  if (resolvedToken) {
+    nextHeaders.set("Authorization", `Bearer ${resolvedToken}`);
+  }
+
+  return nextHeaders;
+}
 
 async function safeFetchJson<T>(
   input: string,
-  init?: RequestInit
+  init?: RequestInit,
+  token?: string
 ): Promise<{ data: T; error: string | null }> {
   try {
-    const response = await fetch(input, init);
+    const response = await fetch(input, {
+      ...init,
+      headers: buildAuthHeaders(token, init?.headers)
+    });
 
     if (!response.ok) {
       return {
@@ -90,10 +113,8 @@ export type BatchJobDetail = {
 };
 
 export type CreateBatchJobInput = {
-  tenantId: string;
   name: string;
-  type: "PRINTING_EXTRACT" | "IMAGE_GENERATE" | "EXTRACT_THEN_GENERATE";
-  createdBy: string;
+  type: "PRINTING_EXTRACT" | "IMAGE_GENERATE";
   config?: Record<string, unknown>;
   items: Array<{
     sourceFileId?: string | null;
@@ -123,14 +144,26 @@ export type SystemSettings = {
   };
 };
 
-export async function uploadFile(file: File, tenantId = "demo-tenant") {
+
+export type CurrentUserProfile = {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  tenantId: string;
+  chcyAccessKey: string;
+  chcySecretKey: string;
+  hasChcyCredentials: boolean;
+};
+
+export async function uploadFile(file: File, token?: string) {
   const form = new FormData();
   form.append("file", file);
-  form.append("tenantId", tenantId);
 
   const response = await fetch(`${API_BASE_URL}/files`, {
     method: "POST",
-    body: form
+    body: form,
+    headers: buildAuthHeaders(token)
   });
 
   if (!response.ok) {
@@ -140,12 +173,12 @@ export async function uploadFile(file: File, tenantId = "demo-tenant") {
   return response.json() as Promise<UploadedFileResult>;
 }
 
-export async function createBatchJob(payload: CreateBatchJobInput) {
+export async function createBatchJob(payload: CreateBatchJobInput, token?: string) {
   const response = await fetch(`${API_BASE_URL}/batch-jobs`, {
     method: "POST",
-    headers: {
+    headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
-    },
+    }),
     body: JSON.stringify(payload)
   });
 
@@ -156,12 +189,10 @@ export async function createBatchJob(payload: CreateBatchJobInput) {
   return response.json() as Promise<{ data: { batchJobId: string } }>;
 }
 
-export async function listBatchJobs() {
+export async function listBatchJobs(token?: string) {
   const result = await safeFetchJson<{
     data: BatchJobSummary[];
-  }>(`${API_BASE_URL}/batch-jobs`, {
-    cache: "no-store"
-  });
+  }>(`${API_BASE_URL}/batch-jobs`, { cache: "no-store" }, token);
 
   return {
     data: result.data?.data ?? [],
@@ -169,12 +200,10 @@ export async function listBatchJobs() {
   };
 }
 
-export async function getBatchJob(id: string) {
+export async function getBatchJob(id: string, token?: string) {
   const result = await safeFetchJson<{
     data: BatchJobDetail | null;
-  }>(`${API_BASE_URL}/batch-jobs/${id}`, {
-    cache: "no-store"
-  });
+  }>(`${API_BASE_URL}/batch-jobs/${id}`, { cache: "no-store" }, token);
 
   return {
     data: result.data?.data ?? null,
@@ -182,9 +211,10 @@ export async function getBatchJob(id: string) {
   };
 }
 
-export async function retryBatchJob(id: string) {
+export async function retryBatchJob(id: string, token?: string) {
   const response = await fetch(`${API_BASE_URL}/batch-jobs/${id}/retry`, {
-    method: "POST"
+    method: "POST",
+    headers: buildAuthHeaders(token)
   });
 
   if (!response.ok) {
@@ -199,9 +229,10 @@ export async function retryBatchJob(id: string) {
   }>;
 }
 
-export async function exportBatchJob(id: string) {
+export async function exportBatchJob(id: string, token?: string) {
   const response = await fetch(`${API_BASE_URL}/batch-jobs/${id}/export`, {
-    method: "POST"
+    method: "POST",
+    headers: buildAuthHeaders(token)
   });
 
   if (!response.ok) {
@@ -218,9 +249,10 @@ export async function exportBatchJob(id: string) {
   }>;
 }
 
-export async function retryBatchJobItem(id: string) {
+export async function retryBatchJobItem(id: string, token?: string) {
   const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/retry`, {
-    method: "POST"
+    method: "POST",
+    headers: buildAuthHeaders(token)
   });
 
   if (!response.ok) {
@@ -238,13 +270,14 @@ export async function retryBatchJobItem(id: string) {
 
 export async function exportPrintAsset(
   itemId: string,
-  dpi: number
+  dpi: number,
+  token?: string
 ) {
   const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${itemId}/print-export`, {
     method: "POST",
-    headers: {
+    headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
-    },
+    }),
     body: JSON.stringify({ dpi })
   });
 
@@ -261,13 +294,14 @@ export async function exportPrintAsset(
   }>;
 }
 
-export async function syncBatchJobItemResult(id: string) {
+export async function syncBatchJobItemResult(id: string, token?: string) {
   console.info("[CHCY WEB] 手动查询结果 -> 请求开始", {
     itemId: id,
     url: `${API_BASE_URL}/batch-jobs/items/${id}/sync-result`
   });
   const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/sync-result`, {
-    method: "POST"
+    method: "POST",
+    headers: buildAuthHeaders(token)
   });
 
   if (!response.ok) {
@@ -295,7 +329,7 @@ export async function syncBatchJobItemResult(id: string) {
   return payload;
 }
 
-export async function listCallbackAudits(limit = 50) {
+export async function listCallbackAudits(limit = 50, token?: string) {
   const result = await safeFetchJson<
     Array<{
       id: string;
@@ -306,9 +340,7 @@ export async function listCallbackAudits(limit = 50) {
       requestId: string | null;
       body: Record<string, unknown>;
     }>
-  >(`${API_BASE_URL}/callback-audits?limit=${limit}`, {
-    cache: "no-store"
-  });
+  >(`${API_BASE_URL}/callback-audits?limit=${limit}`, { cache: "no-store" }, token);
 
   return {
     data: result.data ?? [],
@@ -337,8 +369,7 @@ export async function login(input: { email: string; password: string }) {
         email: string;
         name: string;
         role: string;
-        tenantId: string;
-      };
+            };
     };
   }>;
 }
@@ -359,9 +390,10 @@ export async function getBootstrapUser() {
   };
 }
 
-export async function getSystemSettings() {
+export async function getSystemSettings(token?: string) {
   const response = await fetch(`${API_BASE_URL}/system-settings`, {
-    cache: "no-store"
+    cache: "no-store",
+    headers: buildAuthHeaders(token)
   });
 
   if (!response.ok) {
@@ -371,12 +403,12 @@ export async function getSystemSettings() {
   return response.json() as Promise<{ data: SystemSettings }>;
 }
 
-export async function updateSystemSettings(payload: SystemSettings) {
+export async function updateSystemSettings(payload: SystemSettings, token?: string) {
   const response = await fetch(`${API_BASE_URL}/system-settings`, {
     method: "PUT",
-    headers: {
+    headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
-    },
+    }),
     body: JSON.stringify(payload)
   });
 
@@ -386,3 +418,61 @@ export async function updateSystemSettings(payload: SystemSettings) {
 
   return response.json() as Promise<{ data: SystemSettings }>;
 }
+
+export async function register(input: {
+  name: string;
+  email: string;
+  password: string;
+}) {
+  const response = await fetch(`${API_BASE_URL}/auth/register`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{
+    data: {
+      token: string;
+      user: CurrentUserProfile;
+    };
+  }>;
+}
+
+export async function getCurrentUser(token?: string) {
+  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+    cache: "no-store",
+    headers: buildAuthHeaders(token)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{ data: CurrentUserProfile }>;
+}
+
+export async function updateMyChcyCredentials(
+  input: { chcyAccessKey: string; chcySecretKey: string },
+  token?: string
+) {
+  const response = await fetch(`${API_BASE_URL}/auth/me/chcy-credentials`, {
+    method: "PUT",
+    headers: buildAuthHeaders(token, {
+      "Content-Type": "application/json"
+    }),
+    body: JSON.stringify(input)
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json() as Promise<{ data: CurrentUserProfile }>;
+}
+

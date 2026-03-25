@@ -4,6 +4,11 @@ import { loadRuntimeSettings } from "./runtime-config";
 
 const logger = pino({ name: "worker:chcy" });
 
+type ChcyCredentialOverride = {
+  accessKey?: string;
+  secretKey?: string;
+};
+
 export class ChcyAiClient {
   private nonce() {
     return crypto.randomBytes(12).toString("base64url");
@@ -27,24 +32,19 @@ export class ChcyAiClient {
       .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
       .join("&");
 
-    const bodyHash = crypto
-      .createHash("sha256")
-      .update(input.body ?? "", "utf8")
-      .digest("hex");
+    const bodyHash = crypto.createHash("sha256").update(input.body ?? "", "utf8").digest("hex");
+    const content = [input.method.toUpperCase(), input.path, queryString, bodyHash, input.timestamp, input.nonce].join("\n");
 
-    const content = [
-      input.method.toUpperCase(),
-      input.path,
-      queryString,
-      bodyHash,
-      input.timestamp,
-      input.nonce
-    ].join("\n");
+    return crypto.createHmac("sha256", input.secretKey).update(content, "utf8").digest("base64url");
+  }
 
-    return crypto
-      .createHmac("sha256", input.secretKey)
-      .update(content, "utf8")
-      .digest("base64url");
+  private async resolveCredentials(credentials?: ChcyCredentialOverride) {
+    const settings = await loadRuntimeSettings();
+    return {
+      baseUrl: settings.chcy?.apiBaseUrl ?? process.env.CHCY_API_BASE_URL ?? "https://api.chcyai.com",
+      accessKey: credentials?.accessKey ?? settings.chcy?.accessKey ?? process.env.CHCY_ACCESS_KEY ?? "",
+      secretKey: credentials?.secretKey ?? settings.chcy?.secretKey ?? process.env.CHCY_SECRET_KEY ?? ""
+    };
   }
 
   private async request<T>(input: {
@@ -53,11 +53,9 @@ export class ChcyAiClient {
     body?: Record<string, unknown>;
     query?: Record<string, string>;
     signatureQuery?: Record<string, string>;
+    credentials?: ChcyCredentialOverride;
   }): Promise<T> {
-    const settings = await loadRuntimeSettings();
-    const baseUrl = settings.chcy?.apiBaseUrl ?? process.env.CHCY_API_BASE_URL ?? "https://api.chcyai.com";
-    const accessKey = settings.chcy?.accessKey ?? process.env.CHCY_ACCESS_KEY ?? "";
-    const secretKey = settings.chcy?.secretKey ?? process.env.CHCY_SECRET_KEY ?? "";
+    const resolved = await this.resolveCredentials(input.credentials);
     const timestamp = this.timestamp();
     const nonce = this.nonce();
     const body = input.body ? JSON.stringify(input.body) : undefined;
@@ -67,11 +65,11 @@ export class ChcyAiClient {
           .join("&")}`
       : "";
 
-    const response = await fetch(`${baseUrl}${input.path}${queryString}`, {
+    const response = await fetch(`${resolved.baseUrl}${input.path}${queryString}`, {
       method: input.method,
       headers: {
         "Content-Type": "application/json",
-        "X-Access-Key": accessKey,
+        "X-Access-Key": resolved.accessKey,
         "X-Timestamp": timestamp,
         "X-Nonce": nonce,
         "X-Signature": this.buildSignature({
@@ -81,71 +79,40 @@ export class ChcyAiClient {
           body,
           timestamp,
           nonce,
-          secretKey
+          secretKey: resolved.secretKey
         })
       },
       body
     });
 
-    logger.info(
-      {
-        method: input.method.toUpperCase(),
-        path: `${input.path}${queryString}`,
-        body: input.body ?? null
-      },
-      "sending chcy request"
-    );
+    logger.info({ method: input.method.toUpperCase(), path: `${input.path}${queryString}`, body: input.body ?? null }, "sending chcy request");
 
     if (!response.ok) {
       const text = await response.text();
-      logger.error(
-        {
-          method: input.method.toUpperCase(),
-          path: `${input.path}${queryString}`,
-          status: response.status,
-          body: text
-        },
-        "chcy request failed"
-      );
+      logger.error({ method: input.method.toUpperCase(), path: `${input.path}${queryString}`, status: response.status, body: text }, "chcy request failed");
       throw new Error(`CHCY request failed: ${response.status} ${text}`);
     }
 
     const payload = (await response.json()) as T;
-    logger.info(
-      {
-        method: input.method.toUpperCase(),
-        path: `${input.path}${queryString}`,
-        payload
-      },
-      "received chcy response"
-    );
+    logger.info({ method: input.method.toUpperCase(), path: `${input.path}${queryString}`, payload }, "received chcy response");
     return payload;
   }
 
-  async uploadFile(file: { fileName: string; contentType: string; buffer: Buffer }) {
-    const settings = await loadRuntimeSettings();
-    const baseUrl = settings.chcy?.apiBaseUrl ?? process.env.CHCY_API_BASE_URL ?? "https://api.chcyai.com";
-    const accessKey = settings.chcy?.accessKey ?? process.env.CHCY_ACCESS_KEY ?? "";
-    const secretKey = settings.chcy?.secretKey ?? process.env.CHCY_SECRET_KEY ?? "";
+  async uploadFile(file: { fileName: string; contentType: string; buffer: Buffer }, credentials?: ChcyCredentialOverride) {
+    const resolved = await this.resolveCredentials(credentials);
     const path = "/v1/files/uploads";
     const timestamp = this.timestamp();
     const nonce = this.nonce();
-    const signature = this.buildSignature({
-      method: "POST",
-      path,
-      timestamp,
-      nonce,
-      secretKey
-    });
+    const signature = this.buildSignature({ method: "POST", path, timestamp, nonce, secretKey: resolved.secretKey });
 
     const form = new FormData();
     const uint8 = new Uint8Array(file.buffer);
     form.append("file", new Blob([uint8], { type: file.contentType }), file.fileName);
 
-    const response = await fetch(`${baseUrl}${path}`, {
+    const response = await fetch(`${resolved.baseUrl}${path}`, {
       method: "POST",
       headers: {
-        "X-Access-Key": accessKey,
+        "X-Access-Key": resolved.accessKey,
         "X-Timestamp": timestamp,
         "X-Nonce": nonce,
         "X-Signature": signature
@@ -153,136 +120,75 @@ export class ChcyAiClient {
       body: form
     });
 
-    logger.info(
-      {
-        method: "POST",
-        path,
-        fileName: file.fileName,
-        contentType: file.contentType,
-        size: file.buffer.byteLength
-      },
-      "uploading file to chcy"
-    );
+    logger.info({ method: "POST", path, fileName: file.fileName, contentType: file.contentType, size: file.buffer.byteLength }, "uploading file to chcy");
 
     if (!response.ok) {
       const text = await response.text();
-      logger.error(
-        {
-          method: "POST",
-          path,
-          status: response.status,
-          body: text
-        },
-        "chcy upload failed"
-      );
+      logger.error({ method: "POST", path, status: response.status, body: text }, "chcy upload failed");
       throw new Error(`CHCY upload failed: ${response.status} ${text}`);
     }
 
-    const payload =
-      (await response.json()) as { data: string; requestId: string; status: string };
+    const payload = (await response.json()) as { data: string; requestId: string; status: string };
     logger.info({ method: "POST", path, payload }, "received chcy upload response");
     return payload;
   }
 
-  createPrintingTask(payload: {
-    callbackUrl: string;
-    referenceImageId: string;
-    fileName?: string;
-    prompt?: string;
-    resolutionRatioId: number;
-    isPatternCompleted: 0 | 1;
-  }) {
-    return this.request<{ data: string; requestId: string; status: string }>({
-      method: "POST",
-      path: "/v1/printing/generations",
-      body: payload
-    });
+  createPrintingTask(
+    payload: {
+      callbackUrl: string;
+      referenceImageId: string;
+      fileName?: string;
+      prompt?: string;
+      resolutionRatioId: number;
+      isPatternCompleted: 0 | 1;
+    },
+    credentials?: ChcyCredentialOverride
+  ) {
+    return this.request<{ data: string; requestId: string; status: string }>({ method: "POST", path: "/v1/printing/generations", body: payload, credentials });
   }
 
-  createImageTask(payload: {
-    callbackUrl: string;
-    prompt: string;
-    referenceImageIdList?: string[];
-    aspectRatioId?: number;
-    resolutionRatioId: number;
-    fileName?: string;
-  }) {
-    return this.request<{ data: string; requestId: string; status: string }>({
-      method: "POST",
-      path: "/v1/images/generations",
-      body: payload
-    });
+  createImageTask(
+    payload: {
+      callbackUrl: string;
+      prompt: string;
+      referenceImageIdList?: string[];
+      aspectRatioId?: number;
+      resolutionRatioId: number;
+      fileName?: string;
+    },
+    credentials?: ChcyCredentialOverride
+  ) {
+    return this.request<{ data: string; requestId: string; status: string }>({ method: "POST", path: "/v1/images/generations", body: payload, credentials });
   }
 
-  createFissionTask(payload: {
-    callbackUrl: string;
-    prompt?: string;
-    fileName?: string;
-    referenceImageId: string;
-    similarity: number;
-    resolutionRatioId: number;
-    aspectRatio: number;
-  }) {
-    return this.request<{ data: string; requestId: string; status: string }>({
-      method: "POST",
-      path: "/v1/fission/generations",
-      body: payload
-    });
+  createFissionTask(
+    payload: {
+      callbackUrl: string;
+      prompt?: string;
+      fileName?: string;
+      referenceImageId: string;
+      similarity: number;
+      resolutionRatioId: number;
+      aspectRatio: number;
+    },
+    credentials?: ChcyCredentialOverride
+  ) {
+    return this.request<{ data: string; requestId: string; status: string }>({ method: "POST", path: "/v1/fission/generations", body: payload, credentials });
   }
 
-  getPrintingTaskInfo(taskId: string) {
-    return this.request<{
-      data: { generateImageId: string; deductibleAmount?: string };
-      requestId: string;
-      status: string;
-    }>({
-      method: "GET",
-      path: `/v1/printing/info/${taskId}`,
-      signatureQuery: {
-        taskId
-      }
-    });
+  getPrintingTaskInfo(taskId: string, credentials?: ChcyCredentialOverride) {
+    return this.request<{ data: { generateImageId: string; deductibleAmount?: string }; requestId: string; status: string }>({ method: "GET", path: `/v1/printing/info/${taskId}`, signatureQuery: { taskId }, credentials });
   }
 
-  getImageTaskInfo(taskId: string) {
-    return this.request<{
-      data: { generateImageId: string; deductibleAmount?: string };
-      requestId: string;
-      status: string;
-    }>({
-      method: "GET",
-      path: `/v1/images/info/${taskId}`,
-      signatureQuery: {
-        taskId
-      }
-    });
+  getImageTaskInfo(taskId: string, credentials?: ChcyCredentialOverride) {
+    return this.request<{ data: { generateImageId: string; deductibleAmount?: string }; requestId: string; status: string }>({ method: "GET", path: `/v1/images/info/${taskId}`, signatureQuery: { taskId }, credentials });
   }
 
-  getFissionTaskInfo(taskId: string) {
-    return this.request<{
-      data: { generateImageId: string; deductibleAmount?: string };
-      requestId: string;
-      status: string;
-    }>({
-      method: "GET",
-      path: `/v1/fission/info/${taskId}`,
-      signatureQuery: {
-        taskId
-      }
-    });
+  getFissionTaskInfo(taskId: string, credentials?: ChcyCredentialOverride) {
+    return this.request<{ data: { generateImageId: string; deductibleAmount?: string }; requestId: string; status: string }>({ method: "GET", path: `/v1/fission/info/${taskId}`, signatureQuery: { taskId }, credentials });
   }
 
-  getFileDownloadUrl(fileId: string) {
-    return this.request<{
-      data: string;
-      requestId: string;
-      status: string;
-    }>({
-      method: "GET",
-      path: `/v1/files/downloads/${fileId}`,
-      signatureQuery: {
-        fileId
-      }
-    });
+  getFileDownloadUrl(fileId: string, credentials?: ChcyCredentialOverride) {
+    return this.request<{ data: string; requestId: string; status: string }>({ method: "GET", path: `/v1/files/downloads/${fileId}`, signatureQuery: { fileId }, credentials });
   }
 }

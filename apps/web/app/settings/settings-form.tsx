@@ -40,21 +40,17 @@ export function SettingsForm({ initialSettings }: { initialSettings: SystemSetti
     fields: Array<{ key: string; label: string; type?: string }>;
   }> = [
     {
-      title: "内部登录",
+      title: "平台会话",
       section: "app",
-      fields: [
-        { key: "loginEmail", label: "登录邮箱" },
-        { key: "loginPassword", label: "登录密码", type: "password" },
-        { key: "sessionSecret", label: "会话密钥", type: "password" }
-      ]
+      fields: [{ key: "sessionSecret", label: "会话密钥", type: "password" }]
     },
     {
-      title: "创次元接口",
+      title: "创次元接口全局回退",
       section: "chcy",
       fields: [
         { key: "apiBaseUrl", label: "接口地址" },
-        { key: "accessKey", label: "AccessKey", type: "password" },
-        { key: "secretKey", label: "SecretKey", type: "password" },
+        { key: "accessKey", label: "全局 AccessKey", type: "password" },
+        { key: "secretKey", label: "全局 SecretKey", type: "password" },
         { key: "callbackBaseUrl", label: "回调基础地址" }
       ]
     },
@@ -73,10 +69,7 @@ export function SettingsForm({ initialSettings }: { initialSettings: SystemSetti
   return (
     <div className="space-y-5">
       {groups.map((group) => (
-        <section
-          key={group.title}
-          className="rounded-[1.6rem] border border-white/8 bg-white/[0.035] p-5 backdrop-blur-xl"
-        >
+        <section key={group.title} className="rounded-[1.6rem] border border-white/8 bg-white/[0.035] p-5 backdrop-blur-xl">
           <p className="text-xs uppercase tracking-[0.18em] text-[#b89b54]">{group.title}</p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             {group.fields.map((field) => (
@@ -85,9 +78,7 @@ export function SettingsForm({ initialSettings }: { initialSettings: SystemSetti
                 <input
                   type={field.type ?? "text"}
                   value={String(settings[group.section][field.key as keyof typeof settings[typeof group.section]] ?? "")}
-                  onChange={(event) =>
-                    updateSection(group.section, field.key as never, event.target.value)
-                  }
+                  onChange={(event) => updateSection(group.section, field.key as never, event.target.value)}
                   className="rounded-2xl border border-[#c79b2c]/18 bg-[#15130f] px-4 py-3 text-sm text-[#fff7dc] outline-none transition focus:border-[#d4af37]"
                 />
               </label>

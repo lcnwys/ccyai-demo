@@ -142,3 +142,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy.ps1
 
 - 本地开发环境下，创次元无法直接回调 `127.0.0.1`，所以需要依赖手动查询结果或公网回调地址
 - 印刷图导出已支持 DPI 导出，裁剪区域 `selectedArea` 还没有接前端交互
+
+
+## Linux 服务器完整部署文档
+
+- 详细步骤：`docs/DEPLOY_LINUX.md`
+- Nginx 配置样板：`deploy/nginx/chcyai.conf`
+- PM2 配置样板：`deploy/pm2/ecosystem.config.cjs`

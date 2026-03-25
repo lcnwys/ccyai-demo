@@ -3,21 +3,23 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { buildApiUrl, exportBatchJob, retryBatchJob } from "../../lib/api";
+import { buildApiUrl, exportBatchJob, retryBatchJob, syncBatchJobItemResult } from "../../lib/api";
 
 type Props = {
   batchJobId: string;
   status: string;
+  queryableItemIds: string[];
 };
 
-export function JobDetailClient({ batchJobId, status }: Props) {
+export function JobDetailClient({ batchJobId, status, queryableItemIds }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [exportMessage, setExportMessage] = useState("");
+  const [syncMessage, setSyncMessage] = useState("");
 
   return (
     <div className="flex w-full flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Link
           href="/callback-audits"
           className="inline-flex rounded-full border border-white/8 bg-white/[0.03] px-4 py-2 text-xs font-semibold text-white/64 transition hover:bg-white/[0.06]"
@@ -25,7 +27,7 @@ export function JobDetailClient({ batchJobId, status }: Props) {
           Callback 审计
         </Link>
         <span className="rounded-full border border-white/8 bg-black/18 px-3 py-2 text-[11px] text-white/38">
-          自动刷新已关闭
+          {status}
         </span>
       </div>
       <div className="grid w-full gap-3 sm:grid-cols-3">
@@ -44,10 +46,24 @@ export function JobDetailClient({ batchJobId, status }: Props) {
       </button>
       <button
         type="button"
-        className="inline-flex items-center justify-center rounded-full border border-[#d6b25e]/12 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/[0.08]"
-        onClick={() => router.refresh()}
+        className="inline-flex items-center justify-center rounded-full border border-[#d6b25e]/12 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={isPending || queryableItemIds.length === 0}
+        onClick={() =>
+          startTransition(async () => {
+            if (!queryableItemIds.length) {
+              setSyncMessage("当前批次没有可查询的任务结果。");
+              return;
+            }
+            setSyncMessage(`正在查询 ${queryableItemIds.length} 个任务结果...`);
+            for (const itemId of queryableItemIds) {
+              await syncBatchJobItemResult(itemId);
+            }
+            setSyncMessage(`已发起 ${queryableItemIds.length} 个任务结果查询。`);
+            router.refresh();
+          })
+        }
       >
-        刷新状态
+        一键查询结果
       </button>
       <button
         type="button"
@@ -65,8 +81,11 @@ export function JobDetailClient({ batchJobId, status }: Props) {
         导出结果
       </button>
       </div>
+      {syncMessage ? (
+        <p className="text-xs leading-6 text-white/42">{syncMessage}</p>
+      ) : null}
       {exportMessage ? (
-        <p className="text-xs leading-6 text-white/52">{exportMessage}</p>
+        <p className="text-xs leading-6 text-white/42">{exportMessage}</p>
       ) : null}
     </div>
   );

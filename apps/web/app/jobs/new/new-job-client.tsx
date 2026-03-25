@@ -16,10 +16,10 @@ const capabilityMeta = {
   "printing-extract": {
     eyebrow: "印花提取",
     title: "印花提取任务",
-    description: "适合单图或批量提取花型主体，保留有效区域，为后续生产或设计做前处理。",
+    description: "适合单图或批量提取花型主体，保留有效区域。提示词默认留空，按需自定义即可。",
     defaultName: "春季家纺花型提取任务",
     defaultType: "PRINTING_EXTRACT" as const,
-    showPrompt: false,
+    showPrompt: true,
     showAspectRatio: false,
     submitLabel: "提交提取任务"
   },
@@ -160,8 +160,6 @@ export function NewJobClient({
                 }
               ];
         const result = await createBatchJob({
-          tenantId: "demo-tenant",
-          createdBy: "demo-user",
           name: jobName,
           type: jobType,
           config:
@@ -434,7 +432,7 @@ export function NewJobClient({
                       <img
                         src={row.previewUrl}
                         alt={row.fileName}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-contain"
                       />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -449,7 +447,7 @@ export function NewJobClient({
                         className="mt-3 min-h-28 w-full rounded-2xl border border-[#c79b2c]/15 bg-black/20 px-3 py-3 text-sm text-[#fff7dc] outline-none transition focus:border-[#d4af37]"
                       />
                     ) : (
-                      <p className="mt-3 text-sm text-white/45">当前能力不需要提示词。</p>
+                      <p className="mt-3 text-sm text-white/45">提示词默认留空，按需自定义。</p>
                     )}
                     </div>
                   </div>
@@ -471,4 +469,5 @@ export function NewJobClient({
     </section>
   );
 }
+
 

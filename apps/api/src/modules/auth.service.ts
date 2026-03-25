@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import crypto from "node:crypto";
 import { PrismaService } from "./prisma.service";
 import { RuntimeConfigService } from "./runtime-config.service";
@@ -14,8 +14,7 @@ type SessionPayload = {
 
 @Injectable()
 export class AuthService {
-  private readonly bootstrapTenantId = "demo-tenant";
-  private readonly bootstrapUserId = "demo-sales-user";
+  private readonly secretMask = "********";
 
   constructor(
     private readonly prisma: PrismaService,
@@ -49,58 +48,104 @@ export class AuthService {
     return `${encoded}.${signature}`;
   }
 
-  async ensureBootstrapUser() {
+  private async verifySessionToken(token: string) {
     const settings = await this.runtimeConfigService.load();
+    const [encoded, signature] = token.split(".");
 
-    await this.prisma.tenant.upsert({
-      where: { id: this.bootstrapTenantId },
-      update: {
-        name: "创次元内部测试租户"
-      },
-      create: {
-        id: this.bootstrapTenantId,
-        name: "创次元内部测试租户"
-      }
-    });
-
-    const userPayload = {
-      tenantId: this.bootstrapTenantId,
-      name: "创次元销售测试账号",
-      email: settings.app.loginEmail.trim().toLowerCase(),
-      passwordHash: this.hashPassword(settings.app.loginPassword),
-      role: "ADMIN"
-    };
-
-    const bootstrapUser = await this.prisma.user.findUnique({
-      where: { id: this.bootstrapUserId }
-    });
-
-    if (bootstrapUser) {
-      await this.prisma.user.update({
-        where: { id: this.bootstrapUserId },
-        data: userPayload
-      });
-      return;
+    if (!encoded || !signature) {
+      throw new UnauthorizedException("登录态无效。");
     }
 
-    const existingByEmail = await this.prisma.user.findUnique({
-      where: { email: userPayload.email }
-    });
+    const expected = crypto
+      .createHmac("sha256", settings.app.sessionSecret)
+      .update(encoded)
+      .digest("base64url");
 
-    if (existingByEmail) {
-      await this.prisma.user.update({
-        where: { id: existingByEmail.id },
-        data: userPayload
-      });
-      return;
+    if (signature !== expected) {
+      throw new UnauthorizedException("登录态校验失败。");
     }
 
-    await this.prisma.user.create({
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as SessionPayload;
+
+    if (payload.exp <= Math.floor(Date.now() / 1000)) {
+      throw new UnauthorizedException("登录态已过期。");
+    }
+
+    return payload;
+  }
+
+  private readToken(input?: string) {
+    if (!input) {
+      throw new UnauthorizedException("未提供登录态。");
+    }
+
+    if (input.startsWith("Bearer ")) {
+      return input.slice(7);
+    }
+
+    return input;
+  }
+
+  private sanitizeCredential(value?: string | null) {
+    return value ? this.secretMask : "";
+  }
+
+  private resolveCredential(nextValue: string, currentValue?: string | null) {
+    if (!nextValue || nextValue === this.secretMask) {
+      return currentValue ?? null;
+    }
+
+    return nextValue;
+  }
+
+  async register(input: { name: string; email: string; password: string }) {
+    const email = input.email.trim().toLowerCase();
+    const existingUser = await this.prisma.user.findUnique({ where: { email } });
+
+    if (existingUser) {
+      throw new ConflictException("该邮箱已经注册。");
+    }
+
+    const tenant = await this.prisma.tenant.create({
       data: {
-        id: this.bootstrapUserId,
-        ...userPayload
+        name: `${input.name.trim()} 的工作台租户`
       }
     });
+
+    const user = await this.prisma.user.create({
+      data: {
+        tenantId: tenant.id,
+        name: input.name.trim(),
+        email,
+        passwordHash: this.hashPassword(input.password),
+        role: "CUSTOMER"
+      }
+    });
+
+    const token = await this.signSession({
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      tenantId: user.tenantId,
+      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 12
+    });
+
+    return {
+      data: {
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          tenantId: user.tenantId,
+          chcyAccessKey: "",
+          chcySecretKey: "",
+          hasChcyCredentials: false
+        }
+      }
+    };
   }
 
   async login(input: { email: string; password: string }) {
@@ -129,17 +174,76 @@ export class AuthService {
           email: user.email,
           name: user.name,
           role: user.role,
-          tenantId: user.tenantId
+          tenantId: user.tenantId,
+          chcyAccessKey: this.sanitizeCredential(user.chcyAccessKey),
+          chcySecretKey: this.sanitizeCredential(user.chcySecretKey),
+          hasChcyCredentials: Boolean(user.chcyAccessKey && user.chcySecretKey)
         }
       }
     };
   }
 
-  getBootstrapInfo() {
-    return this.runtimeConfigService.load().then((settings) => ({
+  async getCurrentUser(authorization?: string) {
+    const session = await this.verifySessionToken(this.readToken(authorization));
+    const user = await this.prisma.user.findUnique({ where: { id: session.userId } });
+
+    if (!user) {
+      throw new UnauthorizedException("用户不存在。");
+    }
+
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      tenantId: user.tenantId,
+      chcyAccessKey: user.chcyAccessKey,
+      chcySecretKey: user.chcySecretKey
+    };
+  }
+
+  async getProfile(authorization?: string) {
+    const user = await this.getCurrentUser(authorization);
+
+    return {
       data: {
-        email: settings.app.loginEmail
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        tenantId: user.tenantId,
+        chcyAccessKey: this.sanitizeCredential(user.chcyAccessKey),
+        chcySecretKey: this.sanitizeCredential(user.chcySecretKey),
+        hasChcyCredentials: Boolean(user.chcyAccessKey && user.chcySecretKey)
       }
-    }));
+    };
+  }
+
+  async updateProfileCredentials(
+    authorization: string | undefined,
+    input: { chcyAccessKey: string; chcySecretKey: string }
+  ) {
+    const user = await this.getCurrentUser(authorization);
+
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        chcyAccessKey: this.resolveCredential(input.chcyAccessKey, user.chcyAccessKey),
+        chcySecretKey: this.resolveCredential(input.chcySecretKey, user.chcySecretKey)
+      }
+    });
+
+    return {
+      data: {
+        id: updated.id,
+        email: updated.email,
+        name: updated.name,
+        role: updated.role,
+        tenantId: updated.tenantId,
+        chcyAccessKey: this.sanitizeCredential(updated.chcyAccessKey),
+        chcySecretKey: this.sanitizeCredential(updated.chcySecretKey),
+        hasChcyCredentials: Boolean(updated.chcyAccessKey && updated.chcySecretKey)
+      }
+    };
   }
 }

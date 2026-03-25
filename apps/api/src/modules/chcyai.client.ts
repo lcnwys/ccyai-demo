@@ -2,6 +2,11 @@ import { Injectable, Logger } from "@nestjs/common";
 import crypto from "node:crypto";
 import { RuntimeConfigService } from "./runtime-config.service";
 
+type ChcyCredentialOverride = {
+  accessKey?: string;
+  secretKey?: string;
+};
+
 @Injectable()
 export class ChcyAiClient {
   private readonly logger = new Logger(ChcyAiClient.name);
@@ -56,8 +61,11 @@ export class ChcyAiClient {
     body?: Record<string, unknown>;
     query?: Record<string, string>;
     signatureQuery?: Record<string, string>;
+    credentials?: ChcyCredentialOverride;
   }): Promise<T> {
     const settings = await this.runtimeConfigService.load();
+    const accessKey = input.credentials?.accessKey || settings.chcy.accessKey;
+    const secretKey = input.credentials?.secretKey || settings.chcy.secretKey;
     const timestamp = this.timestamp();
     const nonce = this.nonce();
     const body = input.body ? JSON.stringify(input.body) : undefined;
@@ -71,7 +79,7 @@ export class ChcyAiClient {
       method: input.method,
       headers: {
         "Content-Type": "application/json",
-        "X-Access-Key": settings.chcy.accessKey,
+        "X-Access-Key": accessKey,
         "X-Timestamp": timestamp,
         "X-Nonce": nonce,
         "X-Signature": this.buildSignature({
@@ -81,7 +89,7 @@ export class ChcyAiClient {
           body,
           timestamp,
           nonce,
-          secretKey: settings.chcy.secretKey
+          secretKey
         })
       },
       body
@@ -115,15 +123,16 @@ export class ChcyAiClient {
     prompt?: string;
     resolutionRatioId: number;
     isPatternCompleted: 0 | 1;
-  }) {
+  }, credentials?: ChcyCredentialOverride) {
     return this.request<{ data: string; requestId: string; status: string }>({
       method: "POST",
       path: "/v1/printing/generations",
-      body: payload
+      body: payload,
+      credentials
     });
   }
 
-  getPrintingTaskInfo(taskId: string) {
+  getPrintingTaskInfo(taskId: string, credentials?: ChcyCredentialOverride) {
     return this.request<{
       data: { generateImageId: string; deductibleAmount: string };
       requestId: string;
@@ -133,11 +142,12 @@ export class ChcyAiClient {
       path: `/v1/printing/info/${taskId}`,
       signatureQuery: {
         taskId
-      }
+      },
+      credentials
     });
   }
 
-  getFissionTaskInfo(taskId: string) {
+  getFissionTaskInfo(taskId: string, credentials?: ChcyCredentialOverride) {
     return this.request<{
       data: { generateImageId: string; deductibleAmount?: string };
       requestId: string;
@@ -147,7 +157,8 @@ export class ChcyAiClient {
       path: `/v1/fission/info/${taskId}`,
       signatureQuery: {
         taskId
-      }
+      },
+      credentials
     });
   }
 
@@ -164,15 +175,16 @@ export class ChcyAiClient {
       cropW?: number;
       cropH?: number;
     };
-  }) {
+  }, credentials?: ChcyCredentialOverride) {
     return this.request<{ data: string; requestId: string; status: string }>({
       method: "POST",
       path: "/v1/prints/generations",
-      body: payload
+      body: payload,
+      credentials
     });
   }
 
-  getPrintAssetTaskInfo(taskId: string) {
+  getPrintAssetTaskInfo(taskId: string, credentials?: ChcyCredentialOverride) {
     return this.request<{
       data: { generateImageId: string; deductibleAmount?: string };
       requestId: string;
@@ -182,11 +194,12 @@ export class ChcyAiClient {
       path: `/v1/prints/info/${taskId}`,
       signatureQuery: {
         taskId
-      }
+      },
+      credentials
     });
   }
 
-  getFileDownloadUrl(fileId: string) {
+  getFileDownloadUrl(fileId: string, credentials?: ChcyCredentialOverride) {
     return this.request<{
       data: string;
       requestId: string;
@@ -196,7 +209,8 @@ export class ChcyAiClient {
       path: `/v1/files/downloads/${fileId}`,
       signatureQuery: {
         fileId
-      }
+      },
+      credentials
     });
   }
 
@@ -207,15 +221,16 @@ export class ChcyAiClient {
     aspectRatioId?: number;
     resolutionRatioId: number;
     fileName?: string;
-  }) {
+  }, credentials?: ChcyCredentialOverride) {
     return this.request<{ data: string; requestId: string; status: string }>({
       method: "POST",
       path: "/v1/images/generations",
-      body: payload
+      body: payload,
+      credentials
     });
   }
 
-  getImageTaskInfo(taskId: string) {
+  getImageTaskInfo(taskId: string, credentials?: ChcyCredentialOverride) {
     return this.request<{
       data: { generateImageId: string; deductibleAmount?: string };
       requestId: string;
@@ -225,7 +240,8 @@ export class ChcyAiClient {
       path: `/v1/images/info/${taskId}`,
       signatureQuery: {
         taskId
-      }
+      },
+      credentials
     });
   }
 }

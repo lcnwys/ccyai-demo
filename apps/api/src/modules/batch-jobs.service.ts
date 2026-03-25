@@ -266,8 +266,11 @@ export class BatchJobsService {
     return completion;
   }
 
-  async list() {
+  async list(currentUser: { id: string; tenantId: string }) {
     const batchJobs = await this.prisma.batchJob.findMany({
+      where: {
+        createdBy: currentUser.id
+      },
       orderBy: {
         createdAt: "desc"
       },
@@ -285,19 +288,19 @@ export class BatchJobsService {
     };
   }
 
-  async create(payload: CreateBatchJobDto) {
+  async create(payload: CreateBatchJobDto, currentUser: { id: string; tenantId: string }) {
     const batchJob = await this.prisma.batchJob.create({
       data: {
-        tenantId: payload.tenantId,
+        tenantId: currentUser.tenantId,
         name: payload.name,
         type: payload.type as BatchJobType,
         status: BatchJobStatus.CREATED,
         totalCount: payload.items.length,
         configJson: (payload.config ?? {}) as Prisma.InputJsonValue,
-        createdBy: payload.createdBy,
+        createdBy: currentUser.id,
           items: {
             create: payload.items.map((item) => ({
-              tenantId: payload.tenantId,
+              tenantId: currentUser.tenantId,
               sourceFileId: item.sourceFileId ?? null,
               prompt: item.prompt,
             resolutionId: item.resolutionId,
@@ -324,20 +327,20 @@ export class BatchJobsService {
     for (const item of items) {
         if (payload.type === BatchJobTypes.IMAGE_GENERATE) {
           await this.queueService.enqueueImageJob({
-            tenantId: payload.tenantId,
+            tenantId: currentUser.tenantId,
             batchJobId: batchJob.id,
             itemId: item.id,
-            sourceFileId: item.sourceFileId ?? undefined,
+            sourceFileId: item.sourceFileId ?? "",
             prompt: item.prompt ?? undefined,
             aspectRatioId: item.aspectRatioId ?? undefined,
             resolutionId: item.resolutionId ?? undefined
           });
         } else {
           await this.queueService.enqueuePrintingJob({
-            tenantId: payload.tenantId,
+            tenantId: currentUser.tenantId,
             batchJobId: batchJob.id,
             itemId: item.id,
-            sourceFileId: item.sourceFileId ?? undefined,
+            sourceFileId: item.sourceFileId ?? "",
             prompt: item.prompt ?? undefined,
             aspectRatioId: item.aspectRatioId ?? undefined,
             resolutionId: item.resolutionId ?? undefined
@@ -354,9 +357,9 @@ export class BatchJobsService {
     };
   }
 
-  async detail(id: string) {
-    const batchJob = await this.prisma.batchJob.findUnique({
-      where: { id },
+  async detail(id: string, currentUser: { id: string }) {
+    const batchJob = await this.prisma.batchJob.findFirst({
+      where: { id, createdBy: currentUser.id },
       include: {
         items: {
           include: {
@@ -403,7 +406,20 @@ export class BatchJobsService {
     };
   }
 
-  async retry(id: string) {
+  async retry(id: string, currentUser: { id: string }) {
+    const batchJob = await this.prisma.batchJob.findFirst({
+      where: { id, createdBy: currentUser.id }
+    });
+
+    if (!batchJob) {
+      return {
+        data: {
+          batchJobId: id,
+          retriedCount: 0
+        }
+      };
+    }
+
     const items = await this.prisma.batchJobItem.findMany({
       where: {
         batchJobId: id,
@@ -417,7 +433,7 @@ export class BatchJobsService {
         tenantId: item.tenantId,
         batchJobId: id,
         itemId: item.id,
-        sourceFileId: item.sourceFileId ?? undefined,
+        sourceFileId: item.sourceFileId ?? "",
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
@@ -427,7 +443,7 @@ export class BatchJobsService {
         tenantId: item.tenantId,
         batchJobId: id,
         itemId: item.id,
-        sourceFileId: item.sourceFileId ?? undefined,
+        sourceFileId: item.sourceFileId ?? "",
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
@@ -443,9 +459,14 @@ export class BatchJobsService {
     };
   }
 
-  async retryItem(id: string) {
-    const item = await this.prisma.batchJobItem.findUnique({
-      where: { id }
+  async retryItem(id: string, currentUser: { id: string }) {
+    const item = await this.prisma.batchJobItem.findFirst({
+      where: {
+        id,
+        batchJob: {
+          createdBy: currentUser.id
+        }
+      }
     });
 
     if (!item) {
@@ -463,7 +484,7 @@ export class BatchJobsService {
         tenantId: item.tenantId,
         batchJobId: item.batchJobId,
         itemId: item.id,
-        sourceFileId: item.sourceFileId ?? undefined,
+        sourceFileId: item.sourceFileId ?? "",
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
@@ -473,7 +494,7 @@ export class BatchJobsService {
         tenantId: item.tenantId,
         batchJobId: item.batchJobId,
         itemId: item.id,
-        sourceFileId: item.sourceFileId ?? undefined,
+        sourceFileId: item.sourceFileId ?? "",
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined
@@ -505,9 +526,9 @@ export class BatchJobsService {
     };
   }
 
-  async export(id: string) {
-    const batchJob = await this.prisma.batchJob.findUnique({
-      where: { id },
+  async export(id: string, currentUser: { id: string }) {
+    const batchJob = await this.prisma.batchJob.findFirst({
+      where: { id, createdBy: currentUser.id },
       include: {
         items: {
           include: {
@@ -618,9 +639,14 @@ export class BatchJobsService {
     };
   }
 
-  async exportPrintAsset(itemId: string, dpi: number) {
-    const item = await this.prisma.batchJobItem.findUnique({
-      where: { id: itemId },
+  async exportPrintAsset(itemId: string, dpi: number, currentUser: { id: string; chcyAccessKey?: string | null; chcySecretKey?: string | null }) {
+    const item = await this.prisma.batchJobItem.findFirst({
+      where: {
+        id: itemId,
+        batchJob: {
+          createdBy: currentUser.id
+        }
+      },
       include: {
         batchJob: true,
         providerTasks: {
@@ -689,13 +715,19 @@ export class BatchJobsService {
       dpi,
       imageWidth: width,
       imageHeight: height
+    }, {
+      accessKey: currentUser.chcyAccessKey ?? undefined,
+      secretKey: currentUser.chcySecretKey ?? undefined
     });
 
     let generatedImageId: string | null = null;
 
     for (let index = 0; index < 12; index += 1) {
       await this.sleep(2000);
-      const info = await this.chcyAiClient.getPrintAssetTaskInfo(submitResult.data);
+      const info = await this.chcyAiClient.getPrintAssetTaskInfo(submitResult.data, {
+        accessKey: currentUser.chcyAccessKey ?? undefined,
+        secretKey: currentUser.chcySecretKey ?? undefined
+      });
       generatedImageId = info.data.generateImageId ?? null;
 
       if (generatedImageId) {
@@ -713,7 +745,10 @@ export class BatchJobsService {
       };
     }
 
-    const download = await this.chcyAiClient.getFileDownloadUrl(generatedImageId);
+    const download = await this.chcyAiClient.getFileDownloadUrl(generatedImageId, {
+      accessKey: currentUser.chcyAccessKey ?? undefined,
+      secretKey: currentUser.chcySecretKey ?? undefined
+    });
     const response = await fetch(download.data);
 
     if (!response.ok) {
@@ -751,10 +786,15 @@ export class BatchJobsService {
     };
   }
 
-  async syncItemResult(id: string) {
+  async syncItemResult(id: string, currentUser: { id: string }) {
     this.logger.log(`manual sync start itemId=${id}`);
-    const item = await this.prisma.batchJobItem.findUnique({
-      where: { id },
+    const item = await this.prisma.batchJobItem.findFirst({
+      where: {
+        id,
+        batchJob: {
+          createdBy: currentUser.id
+        }
+      },
       include: {
         batchJob: true,
         providerTasks: {
@@ -796,7 +836,7 @@ export class BatchJobsService {
         tenantId: item.tenantId,
         batchJobId: item.batchJobId,
         itemId: item.id,
-        sourceFileId: item.sourceFileId ?? undefined,
+        sourceFileId: item.sourceFileId ?? "",
         prompt: item.prompt ?? undefined,
         aspectRatioId: item.aspectRatioId ?? undefined,
         resolutionId: item.resolutionId ?? undefined,
@@ -819,5 +859,7 @@ export class BatchJobsService {
     };
   }
 }
+
+
 
 

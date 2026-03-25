@@ -1,8 +1,8 @@
 import {
   BadRequestException,
-  Body,
   Controller,
   Get,
+  Headers,
   NotFoundException,
   Param,
   Post,
@@ -12,24 +12,30 @@ import {
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
 import type { Response } from "express";
+import { AuthService } from "./auth.service";
 import { FilesService } from "./files.service";
 
 @Controller("files")
 export class FilesController {
-  constructor(private readonly filesService: FilesService) {}
+  constructor(
+    private readonly filesService: FilesService,
+    private readonly authService: AuthService
+  ) {}
 
   @Post()
   @UseInterceptors(FileInterceptor("file"))
   async uploadFile(
-    @UploadedFile() file: Express.Multer.File,
-    @Body("tenantId") tenantId = "demo-tenant"
+    @Headers("authorization") authorization: string | undefined,
+    @UploadedFile() file: Express.Multer.File
   ) {
     if (!file) {
       throw new BadRequestException("file is required");
     }
 
+    const currentUser = await this.authService.getCurrentUser(authorization);
+
     return this.filesService.uploadOriginalFile({
-      tenantId,
+      tenantId: currentUser.tenantId,
       fileName: file.originalname,
       contentType: file.mimetype,
       size: file.size,

@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
-import { LoginForm } from "./login-form";
+import { RegisterForm } from "./register-form";
 
 export const dynamic = "force-dynamic";
 
-export default async function LoginPage() {
+export default async function RegisterPage() {
   const cookieStore = await cookies();
   const session = cookieStore.get("chcy_session");
 
@@ -13,8 +13,8 @@ export default async function LoginPage() {
   }
 
   return (
-    <section className="mx-auto flex min-h-[calc(100vh-140px)] max-w-[520px] items-center">
-      <LoginForm />
+    <section className="mx-auto flex min-h-[calc(100vh-140px)] max-w-[560px] items-center">
+      <RegisterForm />
     </section>
   );
 }

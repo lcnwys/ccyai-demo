@@ -68,15 +68,17 @@ model Tenant {
 }
 
 model User {
-  id           String    @id @default(cuid())
-  tenantId     String
-  name         String
-  email        String    @unique
-  passwordHash String
-  role         String    @default("CUSTOMER")
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  tenant       Tenant    @relation(fields: [tenantId], references: [id])
+  id             String    @id @default(cuid())
+  tenantId       String
+  name           String
+  email          String    @unique
+  passwordHash   String
+  role           String    @default("CUSTOMER")
+  chcyAccessKey  String?
+  chcySecretKey  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
 }
 
 model FileAsset {
@@ -118,7 +120,7 @@ model BatchJobItem {
   sourceFileId  String?
   status        BatchItemStatus  @default(PENDING)
   step          BatchItemStep    @default(EXTRACT)
-  prompt        String?
+  prompt        String?          @db.LongText
   resolutionId  Int?
   aspectRatioId Int?
   errorCode     String?
