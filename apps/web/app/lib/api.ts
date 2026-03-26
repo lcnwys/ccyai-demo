@@ -1,6 +1,34 @@
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
 
+async function resolveApiBaseUrl() {
+  if (/^https?:\/\//i.test(API_BASE_URL)) {
+    return API_BASE_URL;
+  }
+
+  if (typeof window !== "undefined") {
+    return API_BASE_URL;
+  }
+
+  const { headers } = await import("next/headers");
+  const headerStore = await headers();
+  const host =
+    headerStore.get("x-forwarded-host") ??
+    headerStore.get("host") ??
+    "127.0.0.1:3001";
+  const proto =
+    headerStore.get("x-forwarded-proto") ??
+    (host.includes("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+  const path = API_BASE_URL.startsWith("/") ? API_BASE_URL : `/${API_BASE_URL}`;
+
+  return `${proto}://${host}${path}`;
+}
+
+async function resolveApiUrl(path: string) {
+  const baseUrl = await resolveApiBaseUrl();
+  return `${baseUrl}${path}`;
+}
+
 export function buildApiUrl(path: string) {
   return `${API_BASE_URL.replace(/\/api$/, "")}${path}`;
 }
@@ -173,7 +201,7 @@ export async function uploadFile(file: File, token?: string) {
   const form = new FormData();
   form.append("file", file);
 
-  const response = await fetch(`${API_BASE_URL}/files`, {
+  const response = await fetch(await resolveApiUrl("/files"), {
     method: "POST",
     body: form,
     headers: buildAuthHeaders(token)
@@ -187,7 +215,7 @@ export async function uploadFile(file: File, token?: string) {
 }
 
 export async function createBatchJob(payload: CreateBatchJobInput, token?: string) {
-  const response = await fetch(`${API_BASE_URL}/batch-jobs`, {
+  const response = await fetch(await resolveApiUrl("/batch-jobs"), {
     method: "POST",
     headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
@@ -205,7 +233,7 @@ export async function createBatchJob(payload: CreateBatchJobInput, token?: strin
 export async function listBatchJobs(token?: string) {
   const result = await safeFetchJson<{
     data: BatchJobSummary[];
-  }>(`${API_BASE_URL}/batch-jobs`, { cache: "no-store" }, token);
+  }>(await resolveApiUrl("/batch-jobs"), { cache: "no-store" }, token);
 
   return {
     data: result.data?.data ?? [],
@@ -216,7 +244,7 @@ export async function listBatchJobs(token?: string) {
 export async function getBatchJob(id: string, token?: string) {
   const result = await safeFetchJson<{
     data: BatchJobDetail | null;
-  }>(`${API_BASE_URL}/batch-jobs/${id}`, { cache: "no-store" }, token);
+  }>(await resolveApiUrl(`/batch-jobs/${id}`), { cache: "no-store" }, token);
 
   return {
     data: result.data?.data ?? null,
@@ -225,7 +253,7 @@ export async function getBatchJob(id: string, token?: string) {
 }
 
 export async function retryBatchJob(id: string, token?: string) {
-  const response = await fetch(`${API_BASE_URL}/batch-jobs/${id}/retry`, {
+  const response = await fetch(await resolveApiUrl(`/batch-jobs/${id}/retry`), {
     method: "POST",
     headers: buildAuthHeaders(token)
   });
@@ -243,7 +271,7 @@ export async function retryBatchJob(id: string, token?: string) {
 }
 
 export async function exportBatchJob(id: string, token?: string) {
-  const response = await fetch(`${API_BASE_URL}/batch-jobs/${id}/export`, {
+  const response = await fetch(await resolveApiUrl(`/batch-jobs/${id}/export`), {
     method: "POST",
     headers: buildAuthHeaders(token)
   });
@@ -263,7 +291,7 @@ export async function exportBatchJob(id: string, token?: string) {
 }
 
 export async function retryBatchJobItem(id: string, token?: string) {
-  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/retry`, {
+  const response = await fetch(await resolveApiUrl(`/batch-jobs/items/${id}/retry`), {
     method: "POST",
     headers: buildAuthHeaders(token)
   });
@@ -286,7 +314,7 @@ export async function regenerateBatchJobItem(
   payload: RegenerateBatchJobItemInput,
   token?: string
 ) {
-  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/regenerate`, {
+  const response = await fetch(await resolveApiUrl(`/batch-jobs/items/${id}/regenerate`), {
     method: "POST",
     headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
@@ -313,7 +341,7 @@ export async function exportPrintAsset(
   dpi: number,
   token?: string
 ) {
-  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${itemId}/print-export`, {
+  const response = await fetch(await resolveApiUrl(`/batch-jobs/items/${itemId}/print-export`), {
     method: "POST",
     headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
@@ -337,9 +365,9 @@ export async function exportPrintAsset(
 export async function syncBatchJobItemResult(id: string, token?: string) {
   console.info("[CHCY WEB] 手动查询结果 -> 请求开始", {
     itemId: id,
-    url: `${API_BASE_URL}/batch-jobs/items/${id}/sync-result`
+    url: await resolveApiUrl(`/batch-jobs/items/${id}/sync-result`)
   });
-  const response = await fetch(`${API_BASE_URL}/batch-jobs/items/${id}/sync-result`, {
+  const response = await fetch(await resolveApiUrl(`/batch-jobs/items/${id}/sync-result`), {
     method: "POST",
     headers: buildAuthHeaders(token)
   });
@@ -380,7 +408,7 @@ export async function listCallbackAudits(limit = 50, token?: string) {
       requestId: string | null;
       body: Record<string, unknown>;
     }>
-  >(`${API_BASE_URL}/callback-audits?limit=${limit}`, { cache: "no-store" }, token);
+  >(await resolveApiUrl(`/callback-audits?limit=${limit}`), { cache: "no-store" }, token);
 
   return {
     data: result.data ?? [],
@@ -389,7 +417,7 @@ export async function listCallbackAudits(limit = 50, token?: string) {
 }
 
 export async function login(input: { email: string; password: string }) {
-  const response = await fetch(`${API_BASE_URL}/auth/login`, {
+  const response = await fetch(await resolveApiUrl("/auth/login"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -420,7 +448,7 @@ export async function getBootstrapUser() {
       email: string;
       passwordHint: string;
     };
-  }>(`${API_BASE_URL}/auth/bootstrap-user`, {
+  }>(await resolveApiUrl("/auth/bootstrap-user"), {
     cache: "no-store"
   });
 
@@ -431,7 +459,7 @@ export async function getBootstrapUser() {
 }
 
 export async function getSystemSettings(token?: string) {
-  const response = await fetch(`${API_BASE_URL}/system-settings`, {
+  const response = await fetch(await resolveApiUrl("/system-settings"), {
     cache: "no-store",
     headers: buildAuthHeaders(token)
   });
@@ -444,7 +472,7 @@ export async function getSystemSettings(token?: string) {
 }
 
 export async function updateSystemSettings(payload: SystemSettings, token?: string) {
-  const response = await fetch(`${API_BASE_URL}/system-settings`, {
+  const response = await fetch(await resolveApiUrl("/system-settings"), {
     method: "PUT",
     headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
@@ -464,7 +492,7 @@ export async function register(input: {
   email: string;
   password: string;
 }) {
-  const response = await fetch(`${API_BASE_URL}/auth/register`, {
+  const response = await fetch(await resolveApiUrl("/auth/register"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -485,7 +513,7 @@ export async function register(input: {
 }
 
 export async function getCurrentUser(token?: string) {
-  const response = await fetch(`${API_BASE_URL}/auth/me`, {
+  const response = await fetch(await resolveApiUrl("/auth/me"), {
     cache: "no-store",
     headers: buildAuthHeaders(token)
   });
@@ -501,7 +529,7 @@ export async function updateMyChcyCredentials(
   input: { chcyAccessKey: string; chcySecretKey: string },
   token?: string
 ) {
-  const response = await fetch(`${API_BASE_URL}/auth/me/chcy-credentials`, {
+  const response = await fetch(await resolveApiUrl("/auth/me/chcy-credentials"), {
     method: "PUT",
     headers: buildAuthHeaders(token, {
       "Content-Type": "application/json"
