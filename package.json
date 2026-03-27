@@ -18,7 +18,8 @@
   "lint": "npm run lint -ws",
   "db:generate": "npm run db:generate -w @chcy/api",
   "db:migrate": "npm run db:migrate -w @chcy/api",
-  "deploy:docker": "docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build"
+  "deploy:docker": "docker compose -f docker-compose.deploy.yml --env-file .env.deploy up -d --build",
+  "deploy:pm2": "bash ./scripts/deploy-pm2.sh"
 }
 
 }

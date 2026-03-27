@@ -195,21 +195,41 @@ sudo certbot --nginx -d your-domain.com
 项目已提供样板：
 
 - `deploy/pm2/ecosystem.config.cjs`
+- `.env.pm2.example`
+- `scripts/deploy-pm2.sh`
 
-注意：PM2 方案下你需要自己先完成：
+推荐做法：
+
+```bash
+cp .env.pm2.example .env.pm2
+# 按实际服务器地址、数据库、Redis、密钥修改 .env.pm2
+bash scripts/deploy-pm2.sh
+```
+
+这个脚本会自动补齐和 Docker 方案一致的关键步骤：
+
+- `npm install`
+- `npm run db:generate`
+- `npx prisma db push`
+- `npm run build:shared`
+- `npm run build:api`
+- `npm run build:web`
+- `npm run build:worker`
+- `mkdir -p storage`
+- `pm2 startOrReload deploy/pm2/ecosystem.config.cjs --update-env`
+
+如果你想手动执行，也至少要先完成：
 
 ```bash
 npm install
-cd apps/api && npx prisma db push && cd ../..
-npm run build -w @chcy/api
-npm run build -w @chcy/worker
-npm run build -w @chcy/web
-```
-
-然后：
-
-```bash
-pm2 start deploy/pm2/ecosystem.config.cjs
+npm run db:generate
+cd apps/api && npx prisma db push --schema prisma/schema.prisma && cd ../..
+npm run build:shared
+npm run build:api
+npm run build:web
+npm run build:worker
+mkdir -p storage
+pm2 start deploy/pm2/ecosystem.config.cjs --update-env
 pm2 save
 pm2 startup
 ```
@@ -218,6 +238,7 @@ pm2 startup
 
 - Docker 方案更适合现在这套项目，一致性更高。
 - PM2 方案更适合你已经有自己的 MySQL / Redis / Nginx 体系，不想容器化的时候。
+- `deploy/pm2/ecosystem.config.cjs` 会优先读取 `.env.pm2`，其次读取 `.env.deploy` / `.env`，并自动拼出 `DATABASE_URL`、`REDIS_URL`，避免把测试端口写死在配置里。
 
 ## 8. 数据与备份
 
