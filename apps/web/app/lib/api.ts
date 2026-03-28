@@ -1,27 +1,23 @@
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001/api";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
+
+// Internal API URL for SSR (server-to-server communication)
+const INTERNAL_API_URL = process.env.INTERNAL_API_URL ?? "http://127.0.0.1:3002/api";
 
 async function resolveApiBaseUrl() {
-  if (/^https?:\/\//i.test(API_BASE_URL)) {
+  if (typeof window === "undefined") {
+    // SSR: use internal API URL for server-to-server communication
+    // This avoids relying on nginx and host header parsing
+    return INTERNAL_API_URL;
+  }
+
+  // Client-side: use the env variable or construct from current origin
+  if (API_BASE_URL.startsWith("http://") || API_BASE_URL.startsWith("https://")) {
     return API_BASE_URL;
   }
 
-  if (typeof window !== "undefined") {
-    return API_BASE_URL;
-  }
-
-  const { headers } = await import("next/headers");
-  const headerStore = await headers();
-  const host =
-    headerStore.get("x-forwarded-host") ??
-    headerStore.get("host") ??
-    "127.0.0.1:3001";
-  const proto =
-    headerStore.get("x-forwarded-proto") ??
-    (host.includes("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
-  const path = API_BASE_URL.startsWith("/") ? API_BASE_URL : `/${API_BASE_URL}`;
-
-  return `${proto}://${host}${path}`;
+  // If API_BASE_URL is a path like "/api", use current origin
+  return `${window.location.origin}${API_BASE_URL}`;
 }
 
 async function resolveApiUrl(path: string) {

@@ -9,3 +9,4 @@ coverage
 *.log
 storage
 apps/api/prisma/dev.db
+.env.pm2
